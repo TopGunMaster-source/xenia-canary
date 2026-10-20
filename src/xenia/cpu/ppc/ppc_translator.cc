@@ -9,9 +9,12 @@
 
 #include "xenia/cpu/ppc/ppc_translator.h"
 
+#include <atomic>
+
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/reset_scope.h"
@@ -211,6 +214,15 @@ bool PPCTranslator::Translate(GuestFunction* function,
   // Scan the function to find its extents and gather debug data.
   if (!scanner_->Scan(function, debug_info.get())) {
     return false;
+  }
+  if (frontend_->memory()->IsCodeAliasAddress(function->address())) {
+    static std::atomic<uint32_t> user_translations{0};
+    if (user_translations.fetch_add(1) < 400) {
+      int stack_marker;
+      XELOGI("BACKCOMPAT translate {:08X}-{:08X} (host stack {:X})",
+             function->address(), function->end_address(),
+             reinterpret_cast<uintptr_t>(&stack_marker));
+    }
   }
 
   // Setup trace data, if needed.

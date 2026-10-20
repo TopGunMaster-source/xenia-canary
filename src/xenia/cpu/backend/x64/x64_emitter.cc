@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 
+#include <atomic>
 #include <climits>
 #include <cstring>
 
@@ -670,6 +671,18 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
           }
         }
       }
+    }
+  }
+  if (!IsInIndirectionTable(static_cast<uint32_t>(target_address))) {
+    static std::atomic<uint32_t> user_resolves{0};
+    if (user_resolves.fetch_add(1) < 400) {
+      int stack_marker;
+      XELOGI(
+          "BACKCOMPAT resolve {:08X} (lr={:08X} r0={:X} r2={:08X} host stack "
+          "{:X})",
+          uint32_t(target_address), uint32_t(guest_context->lr),
+          uint32_t(guest_context->r[0]), uint32_t(guest_context->r[2]),
+          reinterpret_cast<uintptr_t>(&stack_marker));
     }
   }
   auto fn = thread_state->processor()->ResolveFunction(
