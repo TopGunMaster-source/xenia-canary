@@ -1136,7 +1136,18 @@ bool XexModule::LoadContinue() {
       auto library_name = std::string(string_table[library_name_index]);
 
       if (!kernel_state_->IsModuleLoaded(library_name)) {
-        if (auto module = kernel_state_->LoadUserModule(library_name)) {
+        // A bare library name (e.g. "xefutitle7.xex") is looked for beside
+        // the module importing it, as the console's loader does. Without
+        // this, a library imported by the first module loaded resolved
+        // against no device at all and was never found.
+        std::string library_path = library_name;
+        if (!kernel_state_->IsKernelModule(library_name) &&
+            utf8::find_name_from_guest_path(library_name) == library_name &&
+            !path_.empty()) {
+          library_path = utf8::join_guest_paths(
+              utf8::find_base_guest_path(path_), library_name);
+        }
+        if (auto module = kernel_state_->LoadUserModule(library_path)) {
           if (kernel_state_->FinishLoadingUserModule(module, false)) {
             library_name = module->path();
           }
