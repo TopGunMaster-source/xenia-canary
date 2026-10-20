@@ -14,7 +14,9 @@
 #include "xenia/base/profiling.h"
 #include "xenia/cpu/compiler/compiler.h"
 #include "xenia/cpu/ppc/ppc_context.h"
+#include "xenia/cpu/ppc/ppc_hir_builder.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/memory.h"
 
 DECLARE_bool(debug);
 
@@ -70,6 +72,15 @@ bool ContextPromotionPass::Run(HIRBuilder* builder) {
   //   store_context +100, v1
   // This is more generally done by DSE, however if it could be done here
   // instead as it may be faster (at least on the block-level).
+
+  // Code that runs in an alias space (the backward-compatibility
+  // emulator's user mode) keeps every context access, so the context is
+  // exact at any instruction that faults.
+  auto function = static_cast<ppc::PPCHIRBuilder*>(builder)->function();
+  if (function &&
+      processor_->memory()->IsCodeAliasAddress(function->address())) {
+    return true;
+  }
 
   // Promote loads to values.
   // Process each block independently, for now.

@@ -126,3 +126,22 @@ it (presumably until the handler calls `KeLeaveUserMode`, which makes
   hardware is likely reached through faults) delivered to xefu.
 * `KeSweepIcacheRange`: xefu writes new PowerPC code as the game runs;
   Xenia must drop its translations of that range.
+
+## Status in this fork
+
+* User address space: a 4 GB host range per process (`Memory::CreateAliasSpace`)
+  with 16 MB views of physical memory, rebuilt from xefu's page table on
+  `KeEnterUserMode` and the TB flushes. User code runs with it as
+  `virtual_membase`; code in `B0000000`-`C0000000` is read from it when
+  translated.
+* System calls: `sc` in user code calls xefu's handler with
+  `(record = 0, trap frame)` and resumes at the frame's IAR.
+* Access violations (Windows x64): a host fault in the alias space from user
+  code is mapped back to the guest instruction (the source map); user code is
+  translated without context promotion, so the guest context is exact there.
+  The thread is restarted from a host context captured in `KeEnterUserMode`,
+  which hands xefu an `EXCEPTION_RECORD` (`C0000005`, address at `+0x0C`,
+  read/write and data address at `+0x14`/`+0x18`) with the trap frame, then
+  resumes at the frame's IAR.
+* Not yet: illegal-instruction and trap records, misalignment,
+  `KeSweepIcacheRange` invalidation, `KeSetTimerEx` with a DPC.

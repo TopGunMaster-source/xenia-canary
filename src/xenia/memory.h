@@ -464,6 +464,10 @@ class Memory {
     code_alias_high_ = high;
     code_alias_base_ = alias_base;
   }
+  bool IsCodeAliasAddress(uint32_t guest_address) const {
+    return code_alias_base_ && guest_address >= code_alias_low_ &&
+           guest_address < code_alias_high_;
+  }
   template <typename T = uint8_t*>
   inline T TranslateCode(uint32_t guest_address) const {
     if (code_alias_base_ && guest_address >= code_alias_low_ &&

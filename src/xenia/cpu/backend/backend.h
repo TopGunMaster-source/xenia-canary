@@ -94,6 +94,11 @@ class Backend {
   * */
   virtual void PrepareForReentry(void* ctx) {}
 
+  // The guest stack bookkeeping depth, for code that abandons host frames and
+  // restarts guest execution from an earlier point (user-mode faults).
+  virtual uint32_t GetGuestStackDepth(void* ctx) { return 0; }
+  virtual void SetGuestStackDepth(void* ctx, uint32_t depth) {}
+
   // returns true if populated st
   virtual bool PopulatePseudoStacktrace(GuestPseudoStackTrace* st) {
     return false;

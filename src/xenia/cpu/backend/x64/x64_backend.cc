@@ -1810,6 +1810,14 @@ void X64Backend::PrepareForReentry(void* ctx) {
   bctx->current_stackpoint_depth = 0;
 }
 
+uint32_t X64Backend::GetGuestStackDepth(void* ctx) {
+  return BackendContextForGuestContext(ctx)->current_stackpoint_depth;
+}
+
+void X64Backend::SetGuestStackDepth(void* ctx, uint32_t depth) {
+  BackendContextForGuestContext(ctx)->current_stackpoint_depth = depth;
+}
+
 constexpr uint32_t mxcsr_table[8] = {
     0x1F80, 0x7F80, 0x5F80, 0x3F80, 0x9F80, 0xFF80, 0xDF80, 0xBF80,
 };

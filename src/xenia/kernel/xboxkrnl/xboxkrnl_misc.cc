@@ -12,9 +12,13 @@
 #include <memory>
 #include <string>
 
+#include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/backend/backend.h"
+#include "xenia/cpu/backend/code_cache.h"
+#include "xenia/cpu/function.h"
 #include "xenia/cpu/module.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
@@ -24,6 +28,14 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
+
+// User-mode faults restart the thread from a captured host context.
+#if XE_PLATFORM_WIN32 && XE_ARCH_AMD64
+#define XE_USER_MODE_FAULTS 1
+#include "xenia/base/platform_win.h"
+#else
+#define XE_USER_MODE_FAULTS 0
+#endif
 
 DEFINE_bool(allow_mic_initialization, false,
             "Enable Mic Initialization\n"
@@ -348,11 +360,34 @@ struct UserModeExit {
   uint32_t status;
 };
 
+// Exception record handed to xefu's handler (EXCEPTION_RECORD layout).
+constexpr uint32_t kRecordCode = 0x00;
+constexpr uint32_t kRecordAddress = 0x0C;
+constexpr uint32_t kRecordParamCount = 0x10;
+constexpr uint32_t kRecordParams = 0x14;
+constexpr uint32_t kRecordSize = 0x50;
+
+struct UserModeFault {
+  bool pending = false;
+  uint32_t iar = 0;      // faulting instruction
+  uint32_t address = 0;  // data address
+  bool is_write = false;
+};
+
 struct UserModeState {
   uint32_t handler = 0;
-  uint32_t frame = 0;  // trap frame, kernel memory
+  uint32_t frame = 0;   // trap frame, kernel memory
+  uint32_t record = 0;  // exception record, kernel memory
+  uint32_t next_iar = 0;
+  uint32_t guest_stack_depth = 0;
+  UserModeFault fault;
   cpu::ppc::PPCContext kernel_regs;
   cpu::ppc::PPCContext user_regs;
+#if XE_USER_MODE_FAULTS
+  // Where the thread restarts after a fault in user code: inside
+  // KeEnterUserMode, with the guest code's host frames abandoned.
+  CONTEXT restart;
+#endif
 };
 
 static uint8_t* g_alias_base = nullptr;
@@ -380,6 +415,10 @@ static void SetXer(cpu::ppc::PPCContext* pc, uint32_t xer) {
   pc->xer_ca = (xer >> 29) & 1;
 }
 
+#if XE_USER_MODE_FAULTS
+static bool UserModeFaultCallback(Exception* ex, void* data);
+#endif
+
 // Brings the alias space in line with xefu's page table.
 static bool SyncUserSpace() {
   auto memory = kernel_memory();
@@ -391,6 +430,9 @@ static bool SyncUserSpace() {
     memory->SetCodeAliasRange(g_alias_base, kUserCodeLow, kUserCodeHigh);
     auto processor = kernel_state()->processor();
     processor->AddModule(std::make_unique<UserModeCodeModule>(processor));
+#if XE_USER_MODE_FAULTS
+    ExceptionHandler::Install(UserModeFaultCallback, nullptr);
+#endif
   }
   for (uint32_t seg = 0; seg < 0x100; ++seg) {
     uint32_t entry = UserSegmentEntry(seg);
@@ -439,6 +481,31 @@ static uint32_t ReadFrame(UserModeState* st, cpu::ppc::PPCContext* pc) {
   return xe::load_and_swap<uint32_t>(f + kFrameIar);
 }
 
+// Runs xefu's handler in kernel mode for an event in user code at `iar`
+// (record 0 for a system call), with the user registers currently in `pc`.
+// Returns the address to resume user code at; `pc` holds the user registers
+// as the handler left them.
+static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
+                                   uint32_t record, uint32_t iar) {
+  std::memcpy(&st->user_regs, pc, sizeof(*pc));
+  WriteFrame(st, iar);
+
+  // Run the handler as kernel code: kernel registers and memory view.
+  uint64_t kernel_r1 = st->kernel_regs.r[1];
+  std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
+  pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
+  uint64_t args[] = {record, st->frame};
+  auto thread = XThread::GetCurrentThread();
+  kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
+                                       args, xe::countof(args));
+
+  // Back to user mode with whatever the handler left in the frame.
+  std::memcpy(pc, &st->user_regs, sizeof(*pc));
+  uint32_t resume = ReadFrame(st, pc);
+  pc->virtual_membase = g_alias_base;
+  return resume;
+}
+
 // `sc` from user code: hand it to xefu as (record = null, trap frame).
 static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   UserModeState* st = t_user_mode;
@@ -451,25 +518,82 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
            uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
            uint32_t(pc->r[4]));
   }
-  std::memcpy(&st->user_regs, pc, sizeof(*pc));
-  WriteFrame(st, sc_address);
-
-  // Run the handler as kernel code: kernel registers and memory view.
-  uint64_t kernel_r1 = st->kernel_regs.r[1];
-  std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
-  pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
-  uint64_t args[] = {0, st->frame};
-  auto thread = XThread::GetCurrentThread();
-  kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
-                                       args, xe::countof(args));
-
-  // Back to user mode with whatever the handler left in the frame.
-  std::memcpy(pc, &st->user_regs, sizeof(*pc));
-  uint32_t iar = ReadFrame(st, pc);
-  pc->virtual_membase = g_alias_base;
+  uint32_t iar = RunUserModeHandler(st, pc, 0, sc_address);
   pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
   return true;
 }
+
+static std::atomic<uint32_t> g_fault_logs{0};
+
+// A fault in user code (taken in the host exception handler, below): hand
+// xefu an access violation record and the trap frame. Returns where to
+// resume.
+[[maybe_unused]] static uint32_t DeliverUserModeFault(
+    UserModeState* st, cpu::ppc::PPCContext* pc) {
+  const UserModeFault& fault = st->fault;
+  if (g_fault_logs.fetch_add(1) < 200) {
+    XELOGI("BACKCOMPAT fault at {:08X}: {} {:08X}", fault.iar,
+           fault.is_write ? "write" : "read", fault.address);
+  }
+  auto r = kernel_memory()->TranslateVirtual<uint8_t*>(st->record);
+  std::memset(r, 0, kRecordSize);
+  xe::store_and_swap<uint32_t>(r + kRecordCode, 0xC0000005);
+  xe::store_and_swap<uint32_t>(r + kRecordAddress, fault.iar);
+  xe::store_and_swap<uint32_t>(r + kRecordParamCount, 2);
+  xe::store_and_swap<uint32_t>(r + kRecordParams, fault.is_write ? 1 : 0);
+  xe::store_and_swap<uint32_t>(r + kRecordParams + 4, fault.address);
+  return RunUserModeHandler(st, pc, st->record, fault.iar);
+}
+
+#if XE_USER_MODE_FAULTS
+// Host access violations in the alias space come from user code. The guest
+// context is exact at the faulting instruction (user code is translated
+// without context promotion), so the thread is sent back to the restart
+// point in KeEnterUserMode, which delivers the fault and runs on from where
+// the handler says.
+static bool UserModeFaultCallback(Exception* ex, void* data) {
+  UserModeState* st = t_user_mode;
+  if (!st || !g_alias_base || ex->code() != Exception::Code::kAccessViolation) {
+    return false;
+  }
+  auto base = reinterpret_cast<uint64_t>(g_alias_base);
+  uint64_t fault_address = ex->fault_address();
+  if (fault_address < base || fault_address >= base + 0x100001000ull) {
+    return false;
+  }
+  auto code_cache = kernel_state()->processor()->backend()->code_cache();
+  auto function = code_cache->LookupFunction(ex->pc());
+  if (!function) {
+    return false;
+  }
+  uint32_t iar = function->MapMachineCodeToGuestAddress(ex->pc());
+  if (!kernel_memory()->IsCodeAliasAddress(iar)) {
+    return false;
+  }
+  uint64_t offset = fault_address - base;
+  if (offset >= 0xE0001000ull) {
+    offset -= 0x1000;  // the host offset Xenia adds for 0xE0000000+
+  }
+  st->fault.pending = true;
+  st->fault.iar = iar;
+  st->fault.address = uint32_t(offset);
+  st->fault.is_write = ex->access_violation_operation() ==
+                       Exception::AccessViolationOperation::kWrite;
+
+  const CONTEXT& c = st->restart;
+  ex->set_resume_pc(c.Rip);
+  ex->thread_context()->eflags = c.EFlags;
+  const DWORD64* gprs = &c.Rax;
+  for (uint32_t n = 0; n < 16; ++n) {
+    ex->ModifyIntRegister(n) = gprs[n];
+  }
+  const M128A* xmms = &c.Xmm0;
+  for (uint32_t n = 0; n < 16; ++n) {
+    std::memcpy(&ex->ModifyXmmRegister(n), &xmms[n], sizeof(vec128_t));
+  }
+  return true;
+}
+#endif  // XE_USER_MODE_FAULTS
 
 dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   // r3: CONTEXT with the starting state, r4: xefu's handler.
@@ -487,6 +611,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   auto st = std::make_unique<UserModeState>();
   st->handler = uint32_t(ctx->r[4]);
   st->frame = kernel_memory()->SystemHeapAlloc(kFrameSize);
+  st->record = kernel_memory()->SystemHeapAlloc(kRecordSize);
   std::memcpy(&st->kernel_regs, pc, sizeof(*pc));
 
   // Load the user registers from the CONTEXT.
@@ -514,17 +639,33 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   XELOGI("BACKCOMPAT entering user mode at {:08X} (r1={:08X} r2={:08X})", iar,
          uint32_t(pc->r[1]), uint32_t(pc->r[2]));
 
+  auto processor = kernel_state()->processor();
+  auto backend = processor->backend();
   UserModeState* previous = t_user_mode;
-  t_user_mode = st.get();
+  UserModeState* state = st.get();
+  state->next_iar = iar;
+  state->guest_stack_depth = backend->GetGuestStackDepth(pc);
+  t_user_mode = state;
   uint32_t status = X_STATUS_SUCCESS;
   try {
-    kernel_state()->processor()->ExecuteRaw(thread_state, iar);
+    // Only memory (state) is reliable after a restart: locals changed past
+    // this point would come back with stale values.
+#if XE_USER_MODE_FAULTS
+    RtlCaptureContext(&state->restart);
+#endif
+    if (state->fault.pending) {
+      state->fault.pending = false;
+      backend->SetGuestStackDepth(pc, state->guest_stack_depth);
+      state->next_iar = DeliverUserModeFault(state, pc);
+    }
+    processor->ExecuteRaw(thread_state, state->next_iar);
     XELOGW("BACKCOMPAT user mode code returned to the kernel");
   } catch (const UserModeExit& exit) {
     status = exit.status;
   }
   t_user_mode = previous;
   std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
+  kernel_memory()->SystemHeapFree(st->record);
   kernel_memory()->SystemHeapFree(st->frame);
   XELOGI("BACKCOMPAT left user mode, status {:08X}", status);
   return status;
