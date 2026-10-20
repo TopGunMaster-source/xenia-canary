@@ -115,8 +115,15 @@ class CodeCacheBase : public CodeCache {
     indirection_default_value_ = default_value;
   }
 
+  // Guest code outside the table's range (an emulated user mode's address
+  // space) has no slot; calls to it are resolved without the table.
+  static bool HasIndirectionSlot(uint32_t guest_address) {
+    return guest_address >= kIndirectionTableBase &&
+           guest_address - kIndirectionTableBase < kIndirectionTableSize;
+  }
+
   void AddIndirection(uint32_t guest_address, uint32_t host_address) {
-    if (!indirection_table_base_) {
+    if (!indirection_table_base_ || !HasIndirectionSlot(guest_address)) {
       return;
     }
     uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
@@ -211,7 +218,8 @@ class CodeCacheBase : public CodeCache {
                         func_info.code_size.total);
 
     // Fix up indirection table.
-    if (guest_address && indirection_table_base_) {
+    if (guest_address && indirection_table_base_ &&
+        HasIndirectionSlot(guest_address)) {
       uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
           indirection_table_base_ + (guest_address - kIndirectionTableBase));
       *indirection_slot =
