@@ -51,6 +51,13 @@ int InstrEmit_branch(PPCHIRBuilder& f, const char* src, uint64_t cia,
   if (!lk) {
     // If LR is not set this call will never return here.
     call_flags |= CALL_TAIL;
+  } else if (f.user_code()) {
+    // Code in an emulated user mode (xefu's translated x86 code and its
+    // dispatcher) branches with link into code that often never returns
+    // (blocks chain through the dispatcher), so host calls would grow the
+    // host stack without bound. Every branch there is a jump; a return to
+    // LR resolves the code after the bl as a function of its own.
+    call_flags |= CALL_TAIL;
   }
 
   // TODO(benvanik): set CALL_TAIL if !lk and the last block in the fn.
