@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
@@ -274,6 +275,7 @@ static void DumpGuest(const char* label, uint32_t addr, uint32_t len) {
 // index 0x100 + n maps user segment n (16 MB at n << 24) to the physical
 // 16 MB frame in its top byte, with attribute bits in the low 12 bits.
 static uint32_t g_user_page_table = 0;
+static void LogUserPageTableChanges();
 
 static uint32_t UserSegmentEntry(uint32_t segment) {
   if (!g_user_page_table) {
@@ -669,6 +671,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   }
   pc->sc_resume = 0;
   pc->virtual_membase = g_alias_base;
+  LogUserPageTableChanges();  // baseline for the research diff
   XELOGI("BACKCOMPAT entering user mode at {:08X} (r1={:08X} r2={:08X})", iar,
          uint32_t(pc->r[1]), uint32_t(pc->r[2]));
 
@@ -714,8 +717,47 @@ dword_result_t KeLeaveUserMode_entry(const ppc_context_t& ctx) {
 }
 DECLARE_XBOXKRNL_EXPORT1(KeLeaveUserMode, kNone, kSketchy);
 
+// Research: what xefu changes in its page table structure (1 MB at the
+// KeCreateUserMode r4) before flushing the TB, and the address list it
+// leaves at +0x880 (count) / +0x884 (entries).
+static void LogUserPageTableChanges() {
+  static std::vector<uint32_t> previous;
+  static uint32_t calls = 0;
+  if (!g_user_page_table || calls >= 4) {
+    return;
+  }
+  ++calls;
+  constexpr uint32_t kWords = 0x100000 / 4;
+  auto table =
+      kernel_memory()->TranslateVirtual<const uint8_t*>(g_user_page_table);
+  std::vector<uint32_t> current(kWords);
+  for (uint32_t n = 0; n < kWords; ++n) {
+    current[n] = xe::load_and_swap<uint32_t>(table + 4 * n);
+  }
+  uint32_t count = current[0x880 / 4];
+  std::string list;
+  for (uint32_t n = 0; n < std::min<uint32_t>(count, 16); ++n) {
+    list += fmt::format(" {:08X}", current[0x884 / 4 + n]);
+  }
+  XELOGI("BACKCOMPAT TB flush list: count {}:{}", count, list);
+  uint32_t logged = 0;
+  for (uint32_t n = 0; n < kWords && logged < 96; ++n) {
+    uint32_t before = previous.empty() ? 0 : previous[n];
+    if (current[n] != before) {
+      XELOGI("BACKCOMPAT   page table +{:05X}: {:08X} -> {:08X}", n * 4, before,
+             current[n]);
+      ++logged;
+    }
+  }
+  previous = std::move(current);
+}
+
 dword_result_t KeFlushUserModeCurrentTb_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("KeFlushUserModeCurrentTb", ctx);
+  static std::atomic<uint32_t> flushes{0};
+  if (flushes.fetch_add(1) < 20) {
+    LogBackcompatCall("KeFlushUserModeCurrentTb", ctx);
+  }
+  LogUserPageTableChanges();
   SyncUserSpace();
   return X_STATUS_SUCCESS;
 }
