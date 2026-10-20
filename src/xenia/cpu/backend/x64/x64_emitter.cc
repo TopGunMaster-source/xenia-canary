@@ -760,9 +760,11 @@ void X64Emitter::CallIndirect(const hir::Instr* instr,
     // space) are resolved the slow way; looking them up in the table would
     // read whatever host memory lies at that address.
     Xbyak::Label resolve_slow, resolved;
-    lea(eax, ptr[ebx - static_cast<int32_t>(kIndirectionTableGuestLow)]);
-    cmp(eax, static_cast<int32_t>(kIndirectionTableGuestHigh -
-                                  kIndirectionTableGuestLow));
+    // eax = ebx - kIndirectionTableGuestLow (mod 2^32), as plain arithmetic:
+    // a displacement of -0x80000000 can't be encoded in an address.
+    mov(eax, ebx);
+    add(eax, kIndirectionTableGuestLow);
+    cmp(eax, kIndirectionTableGuestHigh - kIndirectionTableGuestLow);
     jae(resolve_slow, CodeGenerator::T_NEAR);
     mov(eax, dword[ebx]);
     jmp(resolved, CodeGenerator::T_NEAR);
