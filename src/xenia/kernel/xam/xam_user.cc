@@ -1267,6 +1267,12 @@ dword_result_t XamUserLogonEx_entry(pointer_t<X_PROFILEENUMRESULT> profile_ptr,
 }
 DECLARE_XAM_EXPORT1(XamUserLogonEx, kUserProfiles, kSketchy);
 
+dword_result_t XamUserFlushLogonQueue_entry() {
+  // Called by the backward-compatibility emulator; nothing is queued.
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamUserFlushLogonQueue, kUserProfiles, kStub);
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

@@ -109,6 +109,11 @@ DEFINE_path(
 DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 
 DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
+DEFINE_bool(mount_compatibility, true,
+            "Mount <storage root>\\compatibility as the hard drive's "
+            "Compatibility folder, used by the backward-compatibility "
+            "emulator (xefu).",
+            "Storage");
 UPDATE_from_bool(mount_cache, 2024, 8, 31, 20, false);
 
 DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
@@ -659,6 +664,28 @@ void EmulatorApp::EmulatorThread() {
         XELOGE("Unable to register cache path");
       } else {
         fs->RegisterSymbolicLink("cache:", "\\CACHE");
+      }
+    }
+  }
+
+  if (cvars::mount_compatibility) {
+    // The 360's backward-compatibility emulator (xefu) keeps its files and
+    // the emulated original Xbox's hard drive (Xbox1\TDATA, Xbox1\UDATA...)
+    // in a Compatibility folder on the hard drive, looked for on either the
+    // system partition or Partition1. Both are backed by one host folder.
+    // NOTE: registered here, before any \Device\Harddisk0\Partition1 device a
+    // launch mounts, so that VirtualFileSystem::ResolvePath (first matching
+    // prefix wins) sends Compatibility paths here and everything else on.
+    const auto compat_path = emulator_->storage_root() / "compatibility";
+    for (const char* mount :
+         {"\\Device\\Harddisk0\\Partition1\\Compatibility",
+          "\\Device\\Harddisk0\\SystemPartition\\Compatibility"}) {
+      auto compat_device =
+          std::make_unique<xe::vfs::HostPathDevice>(mount, compat_path, false);
+      if (!compat_device->Initialize()) {
+        XELOGE("Unable to scan compatibility path");
+      } else if (!fs->RegisterDevice(std::move(compat_device))) {
+        XELOGE("Unable to register compatibility path {}", mount);
       }
     }
   }

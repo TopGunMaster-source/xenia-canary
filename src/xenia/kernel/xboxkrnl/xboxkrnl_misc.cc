@@ -7,6 +7,11 @@
  ******************************************************************************
  */
 
+#include <atomic>
+#include <string>
+
+#include "xenia/base/logging.h"
+#include "xenia/base/memory.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
@@ -174,6 +179,126 @@ dword_result_t MicDeviceRequest_entry(pointer_t<X_MIC_DEVICE> device_ptr) {
   return X_STATUS_PENDING;
 }
 DECLARE_XBOXKRNL_EXPORT1(MicDeviceRequest, kNone, kStub);
+
+// ---------------------------------------------------------------------------
+// Backward-compatibility (xefu) support, research stage.
+//
+// The 360's original-Xbox emulator runs the Xbox game in a separate user-mode
+// address space that it describes with hardware page table entries and
+// switches into with KeEnterUserMode. Xenia does not model that yet; these
+// stubs log what xefu passes so the layout can be learned from real calls.
+// ---------------------------------------------------------------------------
+
+static void LogBackcompatCall(const char* name, const ppc_context_t& ctx,
+                              uint32_t dump_reg = 0, uint32_t dump_len = 0) {
+  static std::atomic<uint32_t> calls{0};
+  if (calls.fetch_add(1) > 400) {
+    return;
+  }
+  XELOGW(
+      "BACKCOMPAT {}(r3={:08X} r4={:08X} r5={:08X} r6={:08X} r7={:08X} "
+      "r8={:08X}) lr={:08X}",
+      name, uint32_t(ctx->r[3]), uint32_t(ctx->r[4]), uint32_t(ctx->r[5]),
+      uint32_t(ctx->r[6]), uint32_t(ctx->r[7]), uint32_t(ctx->r[8]),
+      uint32_t(ctx->lr));
+  if (!dump_reg || !dump_len) {
+    return;
+  }
+  uint32_t addr = uint32_t(ctx->r[dump_reg]) & ~3u;
+  auto heap = addr ? kernel_memory()->LookupHeap(addr) : nullptr;
+  uint32_t protect = 0;
+  uint32_t last_protect = 0;
+  if (!heap || !heap->QueryProtect(addr, &protect) ||
+      !(protect & kMemoryProtectRead) ||
+      !heap->QueryProtect(addr + dump_len - 1, &last_protect) ||
+      !(last_protect & kMemoryProtectRead)) {
+    return;
+  }
+  auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(addr);
+  for (uint32_t off = 0; off < dump_len; off += 32) {
+    std::string line;
+    for (uint32_t i = 0; i < 32; i += 4) {
+      line += fmt::format(" {:08X}", xe::load_and_swap<uint32_t>(p + off + i));
+    }
+    XELOGW("BACKCOMPAT   r{}+{:04X}:{}", dump_reg, off, line);
+  }
+}
+
+dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeCreateUserMode", ctx, 4, 0x800);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeCreateUserMode, kNone, kStub);
+
+dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeEnterUserMode", ctx, 3, 0x100);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeEnterUserMode, kNone, kStub);
+
+dword_result_t KeLeaveUserMode_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeLeaveUserMode", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeLeaveUserMode, kNone, kStub);
+
+dword_result_t KeFlushUserModeCurrentTb_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeFlushUserModeCurrentTb", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kNone, kStub);
+
+dword_result_t KeFlushCurrentEntireTb_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeFlushCurrentEntireTb", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kNone, kStub);
+
+dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
+  // xefu calls this after writing newly translated code. Xenia will need to
+  // drop its own translations of that range here; logged for now.
+  LogBackcompatCall("KeSweepIcacheRange", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSweepIcacheRange, kNone, kStub);
+
+dword_result_t MmLockAndMapSegmentArray_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("MmLockAndMapSegmentArray", ctx, 3, 0x40);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(MmLockAndMapSegmentArray, kNone, kStub);
+
+dword_result_t MmUnlockAndUnmapSegmentArray_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("MmUnlockAndUnmapSegmentArray", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(MmUnlockAndUnmapSegmentArray, kNone, kStub);
+
+dword_result_t IoDismountVolume_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("IoDismountVolume", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(IoDismountVolume, kFileSystem, kStub);
+
+dword_result_t IoDismountVolumeByFileHandle_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("IoDismountVolumeByFileHandle", ctx);
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(IoDismountVolumeByFileHandle, kFileSystem, kStub);
+
+dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
+  // KeSetTimerEx(timer, due_time, period, dpc): not yet backed by a real
+  // timer; returns "timer was not already set".
+  LogBackcompatCall("KeSetTimerEx", ctx);
+  return 0;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSetTimerEx, kThreading, kStub);
+
+dword_result_t KeCancelTimer_entry(const ppc_context_t& ctx) {
+  LogBackcompatCall("KeCancelTimer", ctx);
+  return 0;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeCancelTimer, kThreading, kStub);
 
 }  // namespace xboxkrnl
 }  // namespace kernel

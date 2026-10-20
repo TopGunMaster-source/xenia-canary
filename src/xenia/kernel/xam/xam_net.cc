@@ -1202,6 +1202,14 @@ dword_result_t NetDll_XNetUnregisterKey_entry(dword_t caller,
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetUnregisterKey, kNetworking, kStub);
 
+dword_result_t NetDll_XnpLoadConfigParams_entry(dword_t caller,
+                                                lpvoid_t params) {
+  // Called by the backward-compatibility emulator; no saved network
+  // configuration is kept.
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(NetDll_XnpLoadConfigParams, kNetworking, kStub);
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe
