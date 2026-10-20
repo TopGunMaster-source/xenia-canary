@@ -99,3 +99,13 @@ jobs:
           path: build/bin/Windows/Release/xenia_canary.exe
           if-no-files-found: error
           retention-days: 7
+
+      # Debug symbols, for reading crash addresses.
+      - name: Upload Xenia Canary symbols
+        if: ${{ steps.prepare_artifacts.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: xenia_canary_windows_pdb
+          path: build/bin/Windows/Release/xenia_canary.pdb
+          if-no-files-found: warn
+          retention-days: 7
