@@ -666,6 +666,303 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   return true;
 }
 
+// Translates a user address through xefu's page tables (16 MB, 64 KB and
+// 4 KB pages), for an access Xenia's host views can't make itself (4 KB pages
+// that don't line up with a 64 KB view). Returns false if xefu's tables don't
+// allow the access.
+static bool TranslateUserAddress(uint32_t address, bool write,
+                                 uint32_t* physical_out) {
+  if (!g_user_page_table) {
+    return false;
+  }
+  auto memory = kernel_memory();
+  auto table = memory->TranslateVirtual<const uint8_t*>(g_user_page_table);
+  uint32_t entry = UserSegmentEntry(address >> 24);
+  uint32_t physical = 0;
+  if (entry) {
+    physical = (entry & 0x1F000000u) | (address & 0x00FFFFFFu);
+  } else {
+    bool large = table[0x840 + (address >> 28)] & 2;
+    uint32_t table_page = xe::load_and_swap<uint16_t>(
+        table + (large ? 0x800 + 2 * (address >> 27) : 2 * (address >> 23)));
+    if (!table_page) {
+      return false;
+    }
+    auto entries =
+        memory->TranslatePhysical<const uint8_t*>(uint32_t(table_page) << 13);
+    entry = xe::load_and_swap<uint32_t>(
+        entries +
+        4 * (large ? (address >> 16) & 0x7FF : (address >> 12) & 0x7FF));
+    uint32_t page_mask = large ? 0xFFFFu : 0xFFFu;
+    physical = (entry & 0x1FFFFFFFu & ~page_mask) | (address & page_mask);
+  }
+  uint32_t pp = entry & 3;
+  if (!entry || pp == 0 || (write && pp != 2)) {
+    return false;
+  }
+  *physical_out = physical;
+  return true;
+}
+
+// Performs the integer load or store at `iar` (the faulting instruction) on
+// guest physical memory through xefu's page tables, updating the guest
+// registers in `pc`. For user pages Xenia can't map as host views. Returns
+// false if the instruction isn't a supported load/store or xefu's tables
+// don't allow the access (the fault then goes to xefu).
+static bool EmulateUserLoadStore(cpu::ppc::PPCContext* pc, uint32_t iar) {
+  auto memory = kernel_memory();
+  uint32_t instr = xe::load_and_swap<uint32_t>(memory->TranslateCode(iar));
+  uint32_t op = instr >> 26;
+  uint32_t rt = (instr >> 21) & 31;
+  uint32_t ra = (instr >> 16) & 31;
+  uint32_t rb = (instr >> 11) & 31;
+  uint32_t size = 0;
+  bool is_load = true, update = false, reversed = false, sign = false;
+  uint64_t ea = ra ? pc->r[ra] : 0;
+  int64_t d = int16_t(instr & 0xFFFF);
+  switch (op) {
+    case 32:
+      size = 4;
+      break;  // lwz
+    case 33:
+      size = 4;
+      update = true;
+      break;  // lwzu
+    case 34:
+      size = 1;
+      break;  // lbz
+    case 35:
+      size = 1;
+      update = true;
+      break;  // lbzu
+    case 36:
+      size = 4;
+      is_load = false;
+      break;  // stw
+    case 37:
+      size = 4;
+      is_load = false;
+      update = true;
+      break;
+    case 38:
+      size = 1;
+      is_load = false;
+      break;  // stb
+    case 39:
+      size = 1;
+      is_load = false;
+      update = true;
+      break;
+    case 40:
+      size = 2;
+      break;  // lhz
+    case 41:
+      size = 2;
+      update = true;
+      break;
+    case 42:
+      size = 2;
+      sign = true;
+      break;  // lha
+    case 43:
+      size = 2;
+      sign = true;
+      update = true;
+      break;
+    case 44:
+      size = 2;
+      is_load = false;
+      break;  // sth
+    case 45:
+      size = 2;
+      is_load = false;
+      update = true;
+      break;
+    case 58:  // ld, ldu, lwa
+      d = int16_t(instr & 0xFFFC);
+      switch (instr & 3) {
+        case 0:
+          size = 8;
+          break;
+        case 1:
+          size = 8;
+          update = true;
+          break;
+        case 2:
+          size = 4;
+          sign = true;
+          break;
+        default:
+          return false;
+      }
+      break;
+    case 62:  // std, stdu
+      d = int16_t(instr & 0xFFFC);
+      is_load = false;
+      switch (instr & 3) {
+        case 0:
+          size = 8;
+          break;
+        case 1:
+          size = 8;
+          update = true;
+          break;
+        default:
+          return false;
+      }
+      break;
+    case 31: {
+      d = int64_t(pc->r[rb]);
+      switch ((instr >> 1) & 0x3FF) {
+        case 23:
+          size = 4;
+          break;  // lwzx
+        case 55:
+          size = 4;
+          update = true;
+          break;  // lwzux
+        case 87:
+          size = 1;
+          break;  // lbzx
+        case 119:
+          size = 1;
+          update = true;
+          break;  // lbzux
+        case 151:
+          size = 4;
+          is_load = false;
+          break;  // stwx
+        case 183:
+          size = 4;
+          is_load = false;
+          update = true;
+          break;
+        case 215:
+          size = 1;
+          is_load = false;
+          break;  // stbx
+        case 247:
+          size = 1;
+          is_load = false;
+          update = true;
+          break;
+        case 279:
+          size = 2;
+          break;  // lhzx
+        case 311:
+          size = 2;
+          update = true;
+          break;
+        case 343:
+          size = 2;
+          sign = true;
+          break;  // lhax
+        case 407:
+          size = 2;
+          is_load = false;
+          break;  // sthx
+        case 439:
+          size = 2;
+          is_load = false;
+          update = true;
+          break;
+        case 21:
+          size = 8;
+          break;  // ldx
+        case 53:
+          size = 8;
+          update = true;
+          break;  // ldux
+        case 149:
+          size = 8;
+          is_load = false;
+          break;  // stdx
+        case 181:
+          size = 8;
+          is_load = false;
+          update = true;
+          break;
+        case 341:
+          size = 4;
+          sign = true;
+          break;  // lwax
+        case 534:
+          size = 4;
+          reversed = true;
+          break;  // lwbrx
+        case 662:
+          size = 4;
+          is_load = false;
+          reversed = true;
+          break;
+        case 790:
+          size = 2;
+          reversed = true;
+          break;  // lhbrx
+        case 918:
+          size = 2;
+          is_load = false;
+          reversed = true;
+          break;
+        case 532:
+          size = 8;
+          reversed = true;
+          break;  // ldbrx
+        case 660:
+          size = 8;
+          is_load = false;
+          reversed = true;
+          break;
+        default:
+          return false;
+      }
+    } break;
+    default:
+      return false;
+  }
+  uint32_t address = uint32_t(ea + d);
+  uint8_t bytes[8];
+  uint32_t physical[8];
+  for (uint32_t n = 0; n < size; ++n) {
+    if (!TranslateUserAddress(address + n, !is_load, &physical[n])) {
+      return false;
+    }
+  }
+  if (is_load) {
+    for (uint32_t n = 0; n < size; ++n) {
+      bytes[n] = *memory->TranslatePhysical<const uint8_t*>(physical[n]);
+    }
+    uint64_t value = 0;
+    for (uint32_t n = 0; n < size; ++n) {
+      uint32_t byte = reversed ? size - 1 - n : n;
+      value = (value << 8) | bytes[byte];
+    }
+    if (sign) {
+      uint32_t shift = 64 - 8 * size;
+      value = uint64_t(int64_t(value << shift) >> shift);
+    }
+    pc->r[rt] = value;
+  } else {
+    uint64_t value = pc->r[rt];
+    for (uint32_t n = 0; n < size; ++n) {
+      uint32_t byte = reversed ? n : size - 1 - n;
+      bytes[byte] = uint8_t(value >> (8 * n));
+    }
+    for (uint32_t n = 0; n < size; ++n) {
+      *memory->TranslatePhysical<uint8_t*>(physical[n]) = bytes[n];
+    }
+  }
+  if (update && ra) {
+    pc->r[ra] = address;
+  }
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 20) {
+    XELOGI("BACKCOMPAT emulated {} of {} bytes at {:08X} (physical {:08X})",
+           is_load ? "load" : "store", size, address, physical[0]);
+  }
+  return true;
+}
+
 static void DescribeUserMapping(uint32_t address) {
   if (!g_user_page_table) {
     return;
@@ -867,7 +1164,16 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
     if (state->fault.pending) {
       state->fault.pending = false;
       backend->SetGuestStackDepth(pc, state->guest_stack_depth);
-      state->next_iar = DeliverUserModeFault(state, pc);
+      // Pages xefu maps that Xenia couldn't (4 KB pages): do the access
+      // here. Others are xefu's to handle, except the Xbox's GPU registers
+      // (0xFD000000-0xFEFFFFFF), which xefu emulates on faults.
+      uint32_t fault_address = state->fault.address;
+      bool gpu = fault_address >= 0xFD000000u && fault_address < 0xFF000000u;
+      if (!gpu && EmulateUserLoadStore(pc, state->fault.iar)) {
+        state->next_iar = state->fault.iar + 4;
+      } else {
+        state->next_iar = DeliverUserModeFault(state, pc);
+      }
     }
     processor->ExecuteRaw(thread_state, state->next_iar);
     XELOGW("BACKCOMPAT user mode code returned to the kernel");
