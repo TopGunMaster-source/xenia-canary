@@ -89,3 +89,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           archive: false
+
+      # The bare executable as a .zip as well, for unpacking without 7-Zip.
+      - name: Upload Xenia Canary executable (zip)
+        if: ${{ steps.prepare_artifacts.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: xenia_canary_windows_exe
+          path: build/bin/Windows/Release/xenia_canary.exe
+          if-no-files-found: error
+          retention-days: 7

@@ -250,7 +250,32 @@ static void DumpGuest(const char* label, uint32_t addr, uint32_t len) {
   }
 }
 
+// The page table xefu hands KeCreateUserMode (r4). Each 32-bit entry at
+// index 0x100 + n maps user segment n (16 MB at n << 24) to the physical
+// 16 MB frame in its top byte, with attribute bits in the low 12 bits.
+static uint32_t g_user_page_table = 0;
+
+static uint32_t UserSegmentEntry(uint32_t segment) {
+  if (!g_user_page_table) {
+    return 0;
+  }
+  auto table =
+      kernel_memory()->TranslateVirtual<const uint8_t*>(g_user_page_table);
+  return xe::load_and_swap<uint32_t>(table + 4 * (0x100 + segment));
+}
+
+// Kernel-visible address of a user-mode address (through the 16 MB-page
+// physical view at 0xC0000000), or 0 if its segment is unmapped.
+static uint32_t UserToKernelAddress(uint32_t user_address) {
+  uint32_t entry = UserSegmentEntry(user_address >> 24);
+  if (!entry) {
+    return 0;
+  }
+  return 0xC0000000u | (entry & 0x1F000000u) | (user_address & 0x00FFFFFFu);
+}
+
 dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
+  g_user_page_table = uint32_t(ctx->r[4]);
   LogBackcompatCall("KeCreateUserMode", ctx);
   DumpGuest("r4", uint32_t(ctx->r[4]), 0x1000);
   DumpGuest("r6", uint32_t(ctx->r[6]), 0x800);
@@ -276,6 +301,32 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
     }
   }
   DumpGuest("handler", uint32_t(ctx->r[4]), 0x80);
+
+  // The user address space, as the page table describes it now.
+  for (uint32_t seg = 0; seg < 0x100; ++seg) {
+    uint32_t entry = UserSegmentEntry(seg);
+    if (entry) {
+      XELOGW(
+          "BACKCOMPAT   user segment {:02X}000000 -> physical {:08X} "
+          "(entry {:08X})",
+          seg, entry & 0x1F000000u, entry);
+    }
+  }
+  // The code and data the user context points at, through the kernel view.
+  if (heap && heap->QueryProtect(context, &protect) &&
+      (protect & kMemoryProtectRead)) {
+    auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(context);
+    for (uint32_t off : {0x08u, 0x2Cu, 0x54u, 0x10Cu, 0x11Cu}) {
+      uint32_t user = xe::load_and_swap<uint32_t>(p + off);
+      uint32_t kernel = UserToKernelAddress(user);
+      XELOGW("BACKCOMPAT   context+{:X}: user {:08X} -> kernel {:08X}", off,
+             user, kernel);
+      if (kernel) {
+        DumpGuest(fmt::format("user {:08X}", user).c_str(), kernel,
+                  off == 0x08 ? 0x800u : 0x100u);
+      }
+    }
+  }
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeEnterUserMode, kNone, kStub);
