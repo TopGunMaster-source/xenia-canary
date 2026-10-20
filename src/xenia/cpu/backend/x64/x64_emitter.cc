@@ -700,7 +700,9 @@ void X64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   auto fn = static_cast<X64Function*>(function);
   // Resolve address to the function to call and store in rax.
 
-  if (fn->machine_code()) {
+  // Code outside the indirection table (an emulated user mode's) can be
+  // retranslated, so calls to it always resolve.
+  if (fn->machine_code() && IsInIndirectionTable(function->address())) {
     if (!(instr->flags & hir::CALL_TAIL)) {
       mov(rcx, qword[rsp + StackLayout::GUEST_CALL_RET_ADDR]);
 

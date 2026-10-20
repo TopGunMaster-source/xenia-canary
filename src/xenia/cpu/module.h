@@ -44,6 +44,10 @@ class Module {
   virtual Symbol::Status DeclareVariable(uint32_t address, Symbol** out_symbol);
 
   Symbol::Status DefineFunction(Function* symbol);
+  // Forgets the functions overlapping [low, high), so the next lookup
+  // declares (and translates) them afresh. The old Function objects stay
+  // alive, as compiled code may still be running.
+  void ForgetFunctionsInRange(uint32_t low, uint32_t high);
   Symbol::Status DefineVariable(Symbol* symbol);
 
   const std::vector<uint32_t> GetAddressedFunctions();

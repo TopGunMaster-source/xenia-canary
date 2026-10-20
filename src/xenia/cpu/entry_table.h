@@ -52,6 +52,9 @@ class EntryTable {
   void MarkReady(Entry* entry, Function* function, uint32_t end_address);
   void MarkFailed(Entry* entry);
   void Delete(uint32_t address);
+  // Deletes the entries of functions overlapping [low, high); returns how
+  // many.
+  uint32_t DeleteInRange(uint32_t low, uint32_t high);
 
   std::vector<Function*> FindWithAddress(uint32_t address);
 

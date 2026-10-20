@@ -9,6 +9,8 @@
 
 #include "xenia/cpu/entry_table.h"
 
+#include <algorithm>
+
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 
@@ -103,6 +105,23 @@ void EntryTable::Delete(uint32_t address) {
   if (idx != map_.size() && *map_.KeyAt(idx) == address) {
     map_.EraseAt(idx);
   }
+}
+
+uint32_t EntryTable::DeleteInRange(uint32_t low, uint32_t high) {
+  auto global_lock = global_critical_region_.Acquire();
+  uint32_t deleted = 0;
+  for (uint32_t idx = 0; idx < map_.size();) {
+    Entry* entry = map_.Values()[idx];
+    uint32_t end = std::max(entry->end_address, entry->address);
+    if (entry->status != Entry::STATUS_NEW && entry->address < high &&
+        end >= low) {
+      map_.EraseAt(idx);
+      ++deleted;
+    } else {
+      ++idx;
+    }
+  }
+  return deleted;
 }
 
 std::vector<Function*> EntryTable::FindWithAddress(uint32_t address) {

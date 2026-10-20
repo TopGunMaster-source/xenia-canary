@@ -113,6 +113,9 @@ class Processor {
   Function* QueryFunction(uint32_t address);
   std::vector<Function*> FindFunctionsWithAddress(uint32_t address);
   void RemoveFunctionByAddress(uint32_t address);
+  // Drops translations of guest code in [low, high) of `module` (code that
+  // was rewritten), so it is translated again when next run.
+  uint32_t InvalidateFunctions(Module* module, uint32_t low, uint32_t high);
 
   Function* LookupFunction(uint32_t address);
   Module* LookupModule(uint32_t address);

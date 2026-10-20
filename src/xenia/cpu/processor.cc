@@ -253,6 +253,12 @@ void Processor::RemoveFunctionByAddress(uint32_t address) {
   entry_table_.Delete(address);
 }
 
+uint32_t Processor::InvalidateFunctions(Module* module, uint32_t low,
+                                        uint32_t high) {
+  module->ForgetFunctionsInRange(low, high);
+  return entry_table_.DeleteInRange(low, high);
+}
+
 Function* Processor::ResolveFunction(uint32_t address) {
   Entry* entry;
   Entry::Status status = entry_table_.GetOrCreate(address, &entry);

@@ -9,6 +9,8 @@
 
 #include "xenia/cpu/module.h"
 
+#include <algorithm>
+
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 #include "xenia/cpu/processor.h"
@@ -103,6 +105,23 @@ Symbol::Status Module::DeclareFunction(uint32_t address,
       DeclareSymbol(Symbol::Type::kFunction, address, &symbol);
   *out_function = static_cast<Function*>(symbol);
   return status;
+}
+
+void Module::ForgetFunctionsInRange(uint32_t low, uint32_t high) {
+  auto global_lock = global_critical_region_.Acquire();
+  for (auto it = map_.begin(); it != map_.end();) {
+    Symbol* symbol = it->second;
+    if (symbol->type() == Symbol::Type::kFunction &&
+        symbol->status() != Symbol::Status::kDefining) {
+      auto function = static_cast<Function*>(symbol);
+      uint32_t end = std::max(function->end_address(), function->address());
+      if (function->address() < high && end >= low) {
+        it = map_.erase(it);
+        continue;
+      }
+    }
+    ++it;
+  }
 }
 
 Symbol::Status Module::DeclareVariable(uint32_t address, Symbol** out_symbol) {

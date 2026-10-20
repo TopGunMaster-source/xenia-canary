@@ -394,6 +394,7 @@ struct UserModeState {
 };
 
 static uint8_t* g_alias_base = nullptr;
+static cpu::Module* g_user_module = nullptr;
 static uint32_t g_alias_entries[0x100] = {};
 static thread_local UserModeState* t_user_mode = nullptr;
 static std::atomic<uint32_t> g_syscall_logs{0};
@@ -459,7 +460,9 @@ static bool SyncUserSpace() {
     g_alias_pages.assign(kUserPageCount, 0);
     memory->SetCodeAliasRange(g_alias_base, kUserCodeLow, kUserCodeHigh);
     auto processor = kernel_state()->processor();
-    processor->AddModule(std::make_unique<UserModeCodeModule>(processor));
+    auto module = std::make_unique<UserModeCodeModule>(processor);
+    g_user_module = module.get();
+    processor->AddModule(std::move(module));
 #if XE_USER_MODE_FAULTS
     // Ahead of the emulator's guest crash handler, which would otherwise
     // stop at the first fault in user code.
@@ -868,10 +871,56 @@ dword_result_t KeFlushCurrentEntireTb_entry(const ppc_context_t& ctx) {
 }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kNone, kSketchy);
 
+// Drops Xenia's translations of user code at the physical range
+// [physical, physical + length), wherever user mode maps it.
+static void InvalidateUserCode(uint32_t physical, uint32_t length) {
+  if (!g_user_module || !length) {
+    return;
+  }
+  auto processor = kernel_state()->processor();
+  uint32_t physical_end = physical + length;
+  uint32_t dropped = 0;
+  // 16 MB pages.
+  for (uint32_t seg = kUserCodeLow >> 24; seg < kUserCodeHigh >> 24; ++seg) {
+    uint32_t entry = g_alias_entries[seg];
+    if (!entry) {
+      continue;
+    }
+    uint32_t frame = entry & 0x1F000000u;
+    uint32_t low = std::max(physical, frame);
+    uint32_t high = std::min(physical_end, frame + 0x01000000u);
+    if (low < high) {
+      uint32_t user = seg << 24;
+      dropped += processor->InvalidateFunctions(
+          g_user_module, user + (low - frame), user + (high - frame));
+    }
+  }
+  // 64 KB pages.
+  for (uint32_t page = kUserCodeLow >> kUserPageShift;
+       page < kUserCodeHigh >> kUserPageShift; ++page) {
+    uint32_t mapping = g_alias_pages.empty() ? 0 : g_alias_pages[page];
+    if (!mapping) {
+      continue;
+    }
+    uint32_t frame = mapping & ~0xFFFFu;
+    uint32_t low = std::max(physical, frame);
+    uint32_t high = std::min(physical_end, frame + (1u << kUserPageShift));
+    if (low < high) {
+      uint32_t user = page << kUserPageShift;
+      dropped += processor->InvalidateFunctions(
+          g_user_module, user + (low - frame), user + (high - frame));
+    }
+  }
+  static std::atomic<uint32_t> logs{0};
+  if (dropped && logs.fetch_add(1) < 50) {
+    XELOGI("BACKCOMPAT dropped {} translations of rewritten code at {:08X}",
+           dropped, physical);
+  }
+}
+
 dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
-  // xefu calls this after writing newly translated code. Xenia will need to
-  // drop its own translations of that range here; logged for now, with the
-  // first blocks' code for study.
+  // xefu calls this after writing newly translated code (through the kernel
+  // view of physical memory): Xenia's translations of that code are stale.
   static std::atomic<uint32_t> sweeps{0};
   uint32_t n = sweeps.fetch_add(1);
   if (n < 50) {
@@ -880,6 +929,11 @@ dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
   if (n < 12) {
     DumpGuest("swept", uint32_t(ctx->r[3]),
               std::min<uint32_t>(uint32_t(ctx->r[4]), 0x400));
+  }
+  uint32_t address = uint32_t(ctx->r[3]);
+  uint32_t length = uint32_t(ctx->r[4]);
+  if (address >= 0xC0000000u && address < 0xE0000000u) {
+    InvalidateUserCode(address & 0x1FFFFFFFu, length);
   }
   return X_STATUS_SUCCESS;
 }
