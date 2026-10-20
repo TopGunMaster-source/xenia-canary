@@ -551,23 +551,52 @@ static std::atomic<uint32_t> g_fault_logs{0};
 // without context promotion), so the thread is sent back to the restart
 // point in KeEnterUserMode, which delivers the fault and runs on from where
 // the handler says.
+// Logs a host exception taken while a thread is in user mode that isn't
+// delivered to xefu, so the log says where it happened.
+static void LogUnhandledUserModeException(Exception* ex, const char* why) {
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) >= 20) {
+    return;
+  }
+  bool av = ex->code() == Exception::Code::kAccessViolation;
+  auto exe = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
+  uint64_t pc = ex->pc();
+  auto code_cache = kernel_state()->processor()->backend()->code_cache();
+  auto function = code_cache->LookupFunction(pc);
+  uint32_t guest = function ? function->MapMachineCodeToGuestAddress(pc) : 0;
+  XELOGE(
+      "BACKCOMPAT host exception in user mode ({}): {} pc={:X} (exe+{:X}) "
+      "rsp={:X} fault={:X} op={} guest={:08X}",
+      why, av ? "access violation" : "illegal instruction", pc, pc - exe,
+      ex->thread_context()->int_registers[4], av ? ex->fault_address() : 0,
+      av ? int(ex->access_violation_operation()) : -1, guest);
+  FlushLog();
+}
+
 static bool UserModeFaultCallback(Exception* ex, void* data) {
   UserModeState* st = t_user_mode;
-  if (!st || !g_alias_base || ex->code() != Exception::Code::kAccessViolation) {
+  if (!st || !g_alias_base) {
+    return false;
+  }
+  if (ex->code() != Exception::Code::kAccessViolation) {
+    LogUnhandledUserModeException(ex, "not an access violation");
     return false;
   }
   auto base = reinterpret_cast<uint64_t>(g_alias_base);
   uint64_t fault_address = ex->fault_address();
   if (fault_address < base || fault_address >= base + 0x100001000ull) {
+    LogUnhandledUserModeException(ex, "outside the user address space");
     return false;
   }
   auto code_cache = kernel_state()->processor()->backend()->code_cache();
   auto function = code_cache->LookupFunction(ex->pc());
   if (!function) {
+    LogUnhandledUserModeException(ex, "not in translated code");
     return false;
   }
   uint32_t iar = function->MapMachineCodeToGuestAddress(ex->pc());
   if (!kernel_memory()->IsCodeAliasAddress(iar)) {
+    LogUnhandledUserModeException(ex, "not in user code");
     return false;
   }
   uint64_t offset = fault_address - base;
