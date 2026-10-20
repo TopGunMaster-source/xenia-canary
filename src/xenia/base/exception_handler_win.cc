@@ -152,6 +152,23 @@ void ExceptionHandler::Install(Handler fn, void* data) {
   assert_always("Too many exception handlers installed");
 }
 
+void ExceptionHandler::InstallFirst(Handler fn, void* data) {
+  Install(fn, data);
+  // Rotate the handler just added (the last one) to the front.
+  size_t count = 0;
+  while (count < xe::countof(handlers_) && handlers_[count].first) {
+    ++count;
+  }
+  if (count < 2) {
+    return;
+  }
+  auto added = handlers_[count - 1];
+  for (size_t i = count - 1; i > 0; --i) {
+    handlers_[i] = handlers_[i - 1];
+  }
+  handlers_[0] = added;
+}
+
 void ExceptionHandler::Uninstall(Handler fn, void* data) {
   for (size_t i = 0; i < xe::countof(handlers_); ++i) {
     if (handlers_[i].first == fn && handlers_[i].second == data) {

@@ -41,6 +41,13 @@ class PPCHIRBuilder : public hir::HIRBuilder {
   bool Emit(GuestFunction* function, uint32_t flags);
 
   GuestFunction* function() const { return function_; }
+  // Code run in an emulated user mode (the backward-compatibility
+  // emulator's translated x86 code), whose XER[OV]/XER[SO] and CR[SO] are
+  // modelled, as its flag emulation relies on them.
+  bool user_code() const { return user_code_; }
+  // With cvar user_mode_flags_64bit: CA, OV and Rc=1 compares of user code
+  // use 64-bit mode semantics instead of Xenia's 32-bit approximation.
+  bool exact_64bit() const { return exact_64bit_; }
   Function* LookupFunction(uint32_t address);
   Label* LookupLabel(uint32_t address);
 
@@ -63,9 +70,9 @@ class PPCHIRBuilder : public hir::HIRBuilder {
   void CopyFPSCRToCR1();
   Value* LoadXER();
   void StoreXER(Value* value);
-  // void UpdateXERWithOverflow();
-  // void UpdateXERWithOverflowAndCarry();
-  // void StoreOV(Value* value);
+  // Sets XER[OV] and ORs it into XER[SO].
+  void StoreOV(Value* value);
+  Value* LoadSO();
   Value* LoadCA();
   void StoreCA(Value* value);
   Value* LoadSAT();
@@ -96,6 +103,8 @@ class PPCHIRBuilder : public hir::HIRBuilder {
   // Reset each Emit:
   bool with_debug_info_;
   GuestFunction* function_;
+  bool user_code_ = false;
+  bool exact_64bit_ = false;
   uint64_t start_address_;
   uint64_t instr_count_;
   Instr** instr_offset_list_;

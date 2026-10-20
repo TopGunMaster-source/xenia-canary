@@ -28,6 +28,12 @@
 #include "xenia/cpu/ppc/ppc_opcode_info.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/xex_module.h"
+DEFINE_bool(user_mode_flags_64bit, false,
+            "Model CA, OV and record-form compares of code run in the "
+            "backward-compatibility emulator's user mode with 64-bit mode "
+            "semantics (instead of 32-bit).",
+            "CPU");
+
 DEFINE_bool(
     break_on_unimplemented_instructions, true,
     "Break to the host debugger (or crash if no debugger attached) if an "
@@ -89,6 +95,8 @@ bool PPCHIRBuilder::Emit(GuestFunction* function, uint32_t flags) {
 
   function_ = function;
   start_address_ = function_->address();
+  user_code_ = memory->IsCodeAliasAddress(function_->address());
+  exact_64bit_ = user_code_ && cvars::user_mode_flags_64bit;
   // chrispy: i've seen this one happen, not sure why but i think from trying to
   // precompile twice i've also seen ones with a start and end address that are
   // the same...
@@ -394,6 +402,10 @@ void PPCHIRBuilder::StoreCRField(uint32_t n, uint32_t bit, Value* value) {
 }
 
 void PPCHIRBuilder::UpdateCR(uint32_t n, Value* lhs, bool is_signed) {
+  if (exact_64bit_ && lhs->type == INT64_TYPE) {
+    UpdateCR(n, lhs, LoadZeroInt64(), is_signed);
+    return;
+  }
   UpdateCR(n, Truncate(lhs, INT32_TYPE), LoadZeroInt32(), is_signed);
 }
 
@@ -413,8 +425,9 @@ void PPCHIRBuilder::UpdateCR(uint32_t n, Value* lhs, Value* rhs,
   Value* eq = CompareEQ(lhs, rhs);
   StoreContext(offsetof(PPCContext, cr0) + (4 * n) + 2, eq);
 
-  // Value* so = AllocValue(UINT8_TYPE);
-  // StoreContext(offsetof(PPCContext, cr) + (4 * n) + 3, so);
+  if (user_code_) {
+    StoreContext(offsetof(PPCContext, cr0) + (4 * n) + 3, LoadSO());
+  }
 
   // TOOD(benvanik): trace CR.
 }
@@ -502,13 +515,36 @@ void PPCHIRBuilder::CopyFPSCRToCR1() {
 
 Value* PPCHIRBuilder::LoadXER() {
   Value* v = Shl(ZeroExtend(LoadCA(), INT64_TYPE), 29);
-  // TODO(benvanik): construct with other flags; overflow, etc?
+  if (user_code_) {
+    v = Or(v,
+           Shl(ZeroExtend(LoadContext(offsetof(PPCContext, xer_ov), INT8_TYPE),
+                          INT64_TYPE),
+               30));
+    v = Or(v, Shl(ZeroExtend(LoadSO(), INT64_TYPE), 31));
+  }
   return v;
 }
 
 void PPCHIRBuilder::StoreXER(Value* value) {
-  // TODO(benvanik): use other fields? For now, just pull out CA.
   StoreCA(Truncate(And(Shr(value, 29), LoadConstantInt64(1)), INT8_TYPE));
+  if (user_code_) {
+    StoreContext(
+        offsetof(PPCContext, xer_ov),
+        Truncate(And(Shr(value, 30), LoadConstantInt64(1)), INT8_TYPE));
+    StoreContext(
+        offsetof(PPCContext, xer_so),
+        Truncate(And(Shr(value, 31), LoadConstantInt64(1)), INT8_TYPE));
+  }
+}
+
+void PPCHIRBuilder::StoreOV(Value* value) {
+  assert_true(value->type == INT8_TYPE);
+  StoreContext(offsetof(PPCContext, xer_ov), value);
+  StoreContext(offsetof(PPCContext, xer_so), Or(LoadSO(), value));
+}
+
+Value* PPCHIRBuilder::LoadSO() {
+  return LoadContext(offsetof(PPCContext, xer_so), INT8_TYPE);
 }
 
 Value* PPCHIRBuilder::LoadCA() {

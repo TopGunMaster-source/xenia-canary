@@ -223,6 +223,8 @@ class ExceptionHandler {
   // Installs an exception handler.
   // Handlers are called in the order they are installed.
   static void Install(Handler fn, void* data);
+  // Installs an exception handler ahead of all installed ones (Windows).
+  static void InstallFirst(Handler fn, void* data);
 
   // Uninstalls a previously-installed exception handler.
   static void Uninstall(Handler fn, void* data);

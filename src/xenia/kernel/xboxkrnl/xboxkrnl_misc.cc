@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -431,7 +432,9 @@ static bool SyncUserSpace() {
     auto processor = kernel_state()->processor();
     processor->AddModule(std::make_unique<UserModeCodeModule>(processor));
 #if XE_USER_MODE_FAULTS
-    ExceptionHandler::Install(UserModeFaultCallback, nullptr);
+    // Ahead of the emulator's guest crash handler, which would otherwise
+    // stop at the first fault in user code.
+    ExceptionHandler::InstallFirst(UserModeFaultCallback, nullptr);
 #endif
   }
   for (uint32_t seg = 0; seg < 0x100; ++seg) {
@@ -585,7 +588,8 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
   auto base = reinterpret_cast<uint64_t>(g_alias_base);
   uint64_t fault_address = ex->fault_address();
   if (fault_address < base || fault_address >= base + 0x100001000ull) {
-    LogUnhandledUserModeException(ex, "outside the user address space");
+    // Not user memory; for the other handlers (e.g. MMIO from the kernel
+    // code xefu's handler runs).
     return false;
   }
   auto code_cache = kernel_state()->processor()->backend()->code_cache();
@@ -728,8 +732,17 @@ DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kNone, kSketchy);
 
 dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
   // xefu calls this after writing newly translated code. Xenia will need to
-  // drop its own translations of that range here; logged for now.
-  LogBackcompatCall("KeSweepIcacheRange", ctx);
+  // drop its own translations of that range here; logged for now, with the
+  // first blocks' code for study.
+  static std::atomic<uint32_t> sweeps{0};
+  uint32_t n = sweeps.fetch_add(1);
+  if (n < 50) {
+    LogBackcompatCall("KeSweepIcacheRange", ctx);
+  }
+  if (n < 12) {
+    DumpGuest("swept", uint32_t(ctx->r[3]),
+              std::min<uint32_t>(uint32_t(ctx->r[4]), 0x400));
+  }
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeSweepIcacheRange, kNone, kStub);
