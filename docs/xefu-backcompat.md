@@ -164,3 +164,24 @@ it (presumably until the handler calls `KeLeaveUserMode`, which makes
   `F0000000 + n * 64K`) in a list at page table `+0x884` (count at
   `+0x880`), and calls `KeFlushUserModeCurrentTb`. Xenia's 16 MB segment view
   doesn't see these 64 KB mappings yet, so the fault repeats.
+
+## The page table structure (decoded)
+
+Diffing the structure at `KeCreateUserMode`'s `r4` (`T`) around TB flushes:
+
+* `T + 0x400 + 4 * n`: 16 MB pages for user segment `n` (above).
+* `T + 0x800 + 2 * r`: for each 128 MB region `r` (`r << 27`), the physical
+  address `>> 13` of a table of 2048 words mapping it in 64 KB pages
+  (`physical page | attributes`). Region `0x10` (user `80000000`, the Xbox's
+  RAM) points at `T + 0x2000`, whose entries map physical `10000000` up in
+  order (`10000196`, `10010196`, ...); regions `0x11` and `0x1F` have tables
+  at `T + 0xA000` and `T + 0x6000`.
+* `T + 0x840`: one byte per region (`04`, `06`, `03`); meaning unknown.
+* `T + 0x880`: count of words in the list at `T + 0x884` that xefu fills
+  before `KeFlushUserModeCurrentTb`: the pages to flush, in pairs (user
+  `803F0000` and `F03F0000` for the first fault).
+* Attribute low bits are the PowerPC PP field: 2 read/write, 1 or 3 read
+  only, 0 no access.
+
+The Xbox RAM's 64 KB pages are mapped before user mode is entered; xefu's
+handler finds them valid on the first fault and only flushes the TB.

@@ -422,6 +422,32 @@ static void SetXer(cpu::ppc::PPCContext* pc, uint32_t xer) {
 static bool UserModeFaultCallback(Exception* ex, void* data);
 #endif
 
+// xefu's page table structure (at KeCreateUserMode's r4), as observed:
+// * +0x400 + 4 * n: 16 MB pages for user segment n (n << 24): physical frame
+//   in the top byte, PowerPC page attributes in the low bits (PP in bits 0-1).
+// * +0x800 + 2 * r: for each 128 MB region r (r << 27), the physical address
+//   >> 13 of a table of 2048 32-bit entries mapping it in 64 KB pages
+//   (physical page | attributes); 0 if the region has none. This is how the
+//   Xbox's RAM (user 0x80000000+) is mapped.
+// PP 2 is read/write for user mode, 1 and 3 read only, 0 no access.
+constexpr uint32_t kUserPageShift = 16;
+constexpr uint32_t kUserPageCount = 1u << (32 - kUserPageShift);
+// Per 64 KB page: mapped physical address | 1 (read only) or 2 (read/write),
+// or 0.
+static std::vector<uint32_t> g_alias_pages;
+
+static uint32_t PageMappingFromEntry(uint32_t entry, uint32_t physical) {
+  switch (entry & 3) {
+    case 2:
+      return physical | 2;
+    case 1:
+    case 3:
+      return physical | 1;
+    default:
+      return 0;
+  }
+}
+
 // Brings the alias space in line with xefu's page table.
 static bool SyncUserSpace() {
   auto memory = kernel_memory();
@@ -430,6 +456,7 @@ static bool SyncUserSpace() {
     if (!g_alias_base) {
       return false;
     }
+    g_alias_pages.assign(kUserPageCount, 0);
     memory->SetCodeAliasRange(g_alias_base, kUserCodeLow, kUserCodeHigh);
     auto processor = kernel_state()->processor();
     processor->AddModule(std::make_unique<UserModeCodeModule>(processor));
@@ -439,6 +466,12 @@ static bool SyncUserSpace() {
     ExceptionHandler::InstallFirst(UserModeFaultCallback, nullptr);
 #endif
   }
+  if (!g_user_page_table) {
+    return true;
+  }
+  auto table = memory->TranslateVirtual<const uint8_t*>(g_user_page_table);
+
+  // 16 MB pages: one view per segment.
   for (uint32_t seg = 0; seg < 0x100; ++seg) {
     uint32_t entry = UserSegmentEntry(seg);
     if (entry == g_alias_entries[seg]) {
@@ -449,6 +482,14 @@ static bool SyncUserSpace() {
     }
     g_alias_entries[seg] = 0;
     if (entry) {
+      // Pages of this segment mapped individually before go first.
+      for (uint32_t page = seg << 8; page < (seg + 1) << 8; ++page) {
+        if (g_alias_pages[page]) {
+          memory->UnmapAliasRange(g_alias_base, page << kUserPageShift,
+                                  1u << kUserPageShift);
+          g_alias_pages[page] = 0;
+        }
+      }
       if (memory->MapAliasRange(g_alias_base, seg << 24, 0x01000000,
                                 entry & 0x1F000000u)) {
         g_alias_entries[seg] = entry;
@@ -456,6 +497,59 @@ static bool SyncUserSpace() {
                entry & 0x1F000000u);
       }
     }
+  }
+
+  // 64 KB pages: one view per page.
+  static std::atomic<uint32_t> page_logs{0};
+  uint32_t mapped = 0, unmapped = 0;
+  for (uint32_t region = 0; region < 32; ++region) {
+    uint32_t table_page =
+        xe::load_and_swap<uint16_t>(table + 0x800 + 2 * region);
+    auto entries = table_page ? memory->TranslatePhysical<const uint8_t*>(
+                                    uint32_t(table_page) << 13)
+                              : nullptr;
+    for (uint32_t n = 0; n < 2048; ++n) {
+      uint32_t page = (region << 11) | n;
+      uint32_t address = page << kUserPageShift;
+      if (g_alias_entries[address >> 24]) {
+        continue;  // covered by a 16 MB page
+      }
+      uint32_t want = 0;
+      if (entries) {
+        uint32_t entry = xe::load_and_swap<uint32_t>(entries + 4 * n);
+        if (entry) {
+          want = PageMappingFromEntry(entry, entry & 0x1FFF0000u);
+        }
+      }
+      if (want && address >= 0xE0000000u) {
+        // Xenia offsets host addresses of 0xE0000000+ by 4 KB, which a 64 KB
+        // view can't follow; not supported yet.
+        if (page_logs.fetch_add(1) < 4) {
+          XELOGW("BACKCOMPAT not mapping user page {:08X} (0xE0000000+)",
+                 address);
+        }
+        want = 0;
+      }
+      uint32_t have = g_alias_pages[page];
+      if (want == have) {
+        continue;
+      }
+      if (have) {
+        memory->UnmapAliasRange(g_alias_base, address, 1u << kUserPageShift);
+        ++unmapped;
+      }
+      g_alias_pages[page] = 0;
+      if (want &&
+          memory->MapAliasRange(g_alias_base, address, 1u << kUserPageShift,
+                                want & ~3u, (want & 3) == 2)) {
+        g_alias_pages[page] = want;
+        ++mapped;
+      }
+    }
+  }
+  if ((mapped || unmapped) && page_logs.fetch_add(1) < 40) {
+    XELOGI("BACKCOMPAT user 64 KB pages: {} mapped, {} unmapped", mapped,
+           unmapped);
   }
   return true;
 }

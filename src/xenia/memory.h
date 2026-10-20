@@ -452,7 +452,7 @@ class Memory {
   // Maps [guest_address, guest_address + size) of the alias space to
   // physical memory at physical_address (64 KB aligned, size a multiple).
   bool MapAliasRange(uint8_t* alias_base, uint32_t guest_address, uint32_t size,
-                     uint32_t physical_address);
+                     uint32_t physical_address, bool writable = true);
   void UnmapAliasRange(uint8_t* alias_base, uint32_t guest_address,
                        uint32_t size);
 

@@ -386,13 +386,16 @@ uint8_t* Memory::CreateAliasSpace() {
 }
 
 bool Memory::MapAliasRange(uint8_t* alias_base, uint32_t guest_address,
-                           uint32_t size, uint32_t physical_address) {
+                           uint32_t size, uint32_t physical_address,
+                           bool writable) {
   if (!alias_base || physical_address + uint64_t(size) > 0x20000000ull) {
     return false;
   }
-  void* view = xe::memory::MapFileView(mapping_, alias_base + guest_address,
-                                       size, xe::memory::PageAccess::kReadWrite,
-                                       0x100000000ull + physical_address);
+  void* view =
+      xe::memory::MapFileView(mapping_, alias_base + guest_address, size,
+                              writable ? xe::memory::PageAccess::kReadWrite
+                                       : xe::memory::PageAccess::kReadOnly,
+                              0x100000000ull + physical_address);
   if (view != alias_base + guest_address) {
     XELOGE("Unable to map alias range {:08X}-{:08X} to physical {:08X}",
            guest_address, guest_address + size - 1, physical_address);
