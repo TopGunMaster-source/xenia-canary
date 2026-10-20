@@ -145,3 +145,22 @@ it (presumably until the handler calls `KeLeaveUserMode`, which makes
   resumes at the frame's IAR.
 * Not yet: illegal-instruction and trap records, misalignment,
   `KeSweepIcacheRange` invalidation, `KeSetTimerEx` with a DPC.
+
+## First run of the game (observed)
+
+* The dispatcher at `B9FF7000` misses its cache for the game's entry (Xbox
+  `00030878`) and asks xefu (through a stub at `B9FFB9A8`, `r0 = 4`) for a
+  translation; a worker thread translates the block, writes it at
+  `B8000050` (kernel view `C8000050`) and calls `KeSweepIcacheRange`.
+* The translated block keeps the x86 registers in PowerPC ones (`r7` = ESP,
+  `r2` = EIP, ...), stores little-endian with `stwbrx`, calls helpers in the
+  `B9FF....` runtime for memory and I/O, and uses `addco.` and friends for
+  the x86 flags on plain 32-bit values: user mode looks like it runs with
+  32-bit flag semantics (cvar `user_mode_flags_64bit` switches to 64-bit).
+* Its first instruction pushes to the Xbox stack (`803FFFFC`), which isn't
+  mapped. The fault reaches xefu's handler, which maps the Xbox's 64 MB of
+  RAM (user `80000000`-`83FFFFFF`) in 64 KB pages: it fills attribute words
+  in per-page arrays, queues pairs of addresses (user `80000000 + n * 64K`,
+  `F0000000 + n * 64K`) in a list at page table `+0x884` (count at
+  `+0x880`), and calls `KeFlushUserModeCurrentTb`. Xenia's 16 MB segment view
+  doesn't see these 64 KB mappings yet, so the fault repeats.
