@@ -459,7 +459,13 @@ int InstrEmit_sc(PPCHIRBuilder& f, const InstrData& i) {
   // LEV=2 is to signify 'call import' from Xenia.
   // TODO(gibbed): syscalls!
   if (i.SC.LEV == 0) {
+    // The handler may be an emulated user mode's kernel, which needs the
+    // address of the call and may send execution elsewhere afterwards.
+    f.StoreContext(offsetof(PPCContext, sc_address),
+                   f.LoadConstantUint64(i.address));
     f.CallExtern(f.builtins()->syscall_handler);
+    Value* resume = f.LoadContext(offsetof(PPCContext, sc_resume), INT64_TYPE);
+    f.CallIndirectTrue(resume, resume, CALL_TAIL);
     return 0;
   }
   if (i.SC.LEV == 2) {

@@ -27,6 +27,7 @@ namespace cpu {
 namespace ppc {
 
 class PPCTranslator;
+typedef struct PPCContext_s PPCContext;
 
 struct PPCBuiltins {
   int32_t global_lock_count;
@@ -35,6 +36,11 @@ struct PPCBuiltins {
   Function* leave_global_lock;
   Function* syscall_handler;
 };
+
+// Called for every `sc` (LEV 0) before the default handling; returns true if
+// it handled the call. Set by the kernel for emulated user mode.
+using UserModeSyscallHook = bool (*)(PPCContext* ppc_context);
+extern UserModeSyscallHook g_user_mode_syscall_hook;
 
 class PPCFrontend {
  public:

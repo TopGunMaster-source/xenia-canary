@@ -358,6 +358,59 @@ static const struct {
         0x0000000100000000ull,
     },
 };
+uint8_t* Memory::CreateAliasSpace() {
+  // Find a free 4 GB host range by reserving and immediately releasing it;
+  // segments are mapped into it later with MapAliasRange.
+  for (size_t n = 33; n < 46; n++) {
+    auto base = reinterpret_cast<uint8_t*>(1ull << n);
+    if (base >= mapping_base_ && base < mapping_base_ + 0x200000000ull) {
+      continue;
+    }
+    void* reserved = xe::memory::AllocFixed(
+        base, 0x100000000ull, xe::memory::AllocationType::kReserve,
+        xe::memory::PageAccess::kNoAccess);
+    if (reserved != base) {
+      if (reserved) {
+        xe::memory::DeallocFixed(reserved, 0,
+                                 xe::memory::DeallocationType::kRelease);
+      }
+      continue;
+    }
+    xe::memory::DeallocFixed(reserved, 0,
+                             xe::memory::DeallocationType::kRelease);
+    XELOGI("Alias address space at {}", static_cast<void*>(base));
+    return base;
+  }
+  XELOGE("Unable to find room for an alias address space");
+  return nullptr;
+}
+
+bool Memory::MapAliasRange(uint8_t* alias_base, uint32_t guest_address,
+                           uint32_t size, uint32_t physical_address) {
+  if (!alias_base || physical_address + uint64_t(size) > 0x20000000ull) {
+    return false;
+  }
+  void* view = xe::memory::MapFileView(mapping_, alias_base + guest_address,
+                                       size, xe::memory::PageAccess::kReadWrite,
+                                       0x100000000ull + physical_address);
+  if (view != alias_base + guest_address) {
+    XELOGE("Unable to map alias range {:08X}-{:08X} to physical {:08X}",
+           guest_address, guest_address + size - 1, physical_address);
+    if (view) {
+      xe::memory::UnmapFileView(mapping_, view, size);
+    }
+    return false;
+  }
+  return true;
+}
+
+void Memory::UnmapAliasRange(uint8_t* alias_base, uint32_t guest_address,
+                             uint32_t size) {
+  if (alias_base) {
+    xe::memory::UnmapFileView(mapping_, alias_base + guest_address, size);
+  }
+}
+
 int Memory::MapViews(uint8_t* mapping_base) {
   assert_true(xe::countof(map_info) == xe::countof(views_.all_views));
   // 0xE0000000 4 KB offset is emulated via host_address_offset and on the CPU

@@ -62,8 +62,7 @@ bool PPCScanner::Scan(GuestFunction* function, FunctionDebugInfo* debug_info) {
   bool in_block = false;
   bool starts_with_mfspr_lr = false;
   while (true) {
-    uint32_t code =
-        xe::load_and_swap<uint32_t>(memory->TranslateVirtual(address));
+    uint32_t code = xe::load_and_swap<uint32_t>(memory->TranslateCode(address));
 
     // If we fetched 0 assume that we somehow hit one of the awesome
     // 'no really we meant to end after that bl' functions.
@@ -299,8 +298,7 @@ std::vector<BlockInfo> PPCScanner::FindBlocks(GuestFunction* function) {
   bool in_block = false;
   uint32_t block_start = 0;
   for (uint32_t address = start_address; address <= end_address; address += 4) {
-    uint32_t code =
-        xe::load_and_swap<uint32_t>(memory->TranslateVirtual(address));
+    uint32_t code = xe::load_and_swap<uint32_t>(memory->TranslateCode(address));
     if (!code) {
       continue;
     }

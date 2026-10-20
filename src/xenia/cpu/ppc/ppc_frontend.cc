@@ -80,7 +80,14 @@ void LeaveGlobalLock(PPCContext* ppc_context, void* arg0, void* arg1) {
   global_mutex->unlock();
 }
 
+UserModeSyscallHook g_user_mode_syscall_hook = nullptr;
+
 void SyscallHandler(PPCContext* ppc_context, void* arg0, void* arg1) {
+  // Code running in an emulated user mode (the backward-compatibility
+  // emulator's translated code) makes system calls to its kernel-mode host.
+  if (g_user_mode_syscall_hook && g_user_mode_syscall_hook(ppc_context)) {
+    return;
+  }
   uint64_t syscall_number = ppc_context->r[0];
   switch (syscall_number) {
     default:

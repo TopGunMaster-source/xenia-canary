@@ -443,6 +443,35 @@ class Memory {
   inline T* TranslateVirtual(TypedGuestPointer<T> guest_address) {
     return TranslateVirtual<T*>(guest_address.m_ptr);
   }
+
+  // Alias address spaces: further views of guest physical memory at
+  // addresses of the guest's choosing, for code that runs with its own page
+  // tables (the backward-compatibility emulator's user mode). Each is a 4 GB
+  // host range used as an alternate virtual_membase.
+  uint8_t* CreateAliasSpace();
+  // Maps [guest_address, guest_address + size) of the alias space to
+  // physical memory at physical_address (64 KB aligned, size a multiple).
+  bool MapAliasRange(uint8_t* alias_base, uint32_t guest_address, uint32_t size,
+                     uint32_t physical_address);
+  void UnmapAliasRange(uint8_t* alias_base, uint32_t guest_address,
+                       uint32_t size);
+
+  // Where to read guest code from for translation: an alias space for code
+  // in [low, high), normal memory elsewhere. Code in that range is only ever
+  // executed in the alias space.
+  void SetCodeAliasRange(uint8_t* alias_base, uint32_t low, uint32_t high) {
+    code_alias_low_ = low;
+    code_alias_high_ = high;
+    code_alias_base_ = alias_base;
+  }
+  template <typename T = uint8_t*>
+  inline T TranslateCode(uint32_t guest_address) const {
+    if (code_alias_base_ && guest_address >= code_alias_low_ &&
+        guest_address < code_alias_high_) {
+      return reinterpret_cast<T>(code_alias_base_ + guest_address);
+    }
+    return TranslateVirtual<T>(guest_address);
+  }
   template <typename T>
   inline xe::be<T>* TranslateVirtualBE(uint32_t guest_address)
       XE_RESTRICT const {
@@ -645,6 +674,9 @@ class Memory {
   xe::memory::FileMappingHandle mapping_ =
       xe::memory::kFileMappingHandleInvalid;
   uint8_t* mapping_base_ = nullptr;
+  uint8_t* code_alias_base_ = nullptr;
+  uint32_t code_alias_low_ = 0;
+  uint32_t code_alias_high_ = 0;
   union {
     struct {
       uint8_t* v00000000;

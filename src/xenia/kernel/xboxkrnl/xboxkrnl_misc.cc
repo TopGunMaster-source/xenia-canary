@@ -8,11 +8,18 @@
  */
 
 #include <atomic>
+#include <cstring>
+#include <memory>
 #include <string>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
+#include "xenia/cpu/backend/backend.h"
+#include "xenia/cpu/module.h"
+#include "xenia/cpu/ppc/ppc_context.h"
+#include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 #include "xenia/kernel/xthread.h"
@@ -284,70 +291,270 @@ dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
 }
 DECLARE_XBOXKRNL_EXPORT1(KeCreateUserMode, kNone, kStub);
 
-dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
-  // r3: the user-mode starting context (0xA40 bytes), r4: xefu's handler.
-  LogBackcompatCall("KeEnterUserMode", ctx);
-  uint32_t context = uint32_t(ctx->r[3]);
-  DumpGuest("context", context, 0x600);
-  auto heap = context ? kernel_memory()->LookupHeap(context) : nullptr;
-  uint32_t protect = 0;
-  if (heap && heap->QueryProtect(context, &protect) &&
-      (protect & kMemoryProtectRead)) {
-    auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(context);
-    // Whatever the layout, look at what the first pointer-like words hold.
-    for (uint32_t off : {0x08u, 0x0Cu, 0x2Cu, 0x54u}) {
-      uint32_t target = xe::load_and_swap<uint32_t>(p + off);
-      DumpGuest(fmt::format("context+{:X}->", off).c_str(), target, 0x200);
-    }
-  }
-  DumpGuest("handler", uint32_t(ctx->r[4]), 0x80);
+// ---- Emulated user mode -----------------------------------------------
+//
+// xefu runs the original Xbox game's translated code in user mode, in an
+// address space of its own described by the page table above, and is called
+// back whenever that code makes a system call (or faults). Here user mode is a
+// second view of guest memory (an alias space) used as the thread's membase
+// while user code runs; system calls are delivered to xefu's handler as a
+// trap frame in kernel memory.
 
-  // The user address space, as the page table describes it now.
+// User code lives in these segments; it is only ever executed in user mode,
+// so code there is read from the alias space when translated.
+constexpr uint32_t kUserCodeLow = 0xB0000000;
+constexpr uint32_t kUserCodeHigh = 0xC0000000;
+
+// Trap frame layout xefu reads (offsets from the frame it is handed).
+constexpr uint32_t kFrameGpr = 0x50;   // 32 x u64
+constexpr uint32_t kFrameCtr = 0x1A0;  // u64
+constexpr uint32_t kFrameLr = 0x1A8;
+constexpr uint32_t kFrameIar = 0x1AC;
+constexpr uint32_t kFrameCr = 0x1B0;
+constexpr uint32_t kFrameXer = 0x1B8;
+constexpr uint32_t kFrameSize = 0x200;
+
+// CONTEXT (0xA40 bytes) fields for the starting state.
+constexpr uint32_t kCtxIar = 0x08;
+constexpr uint32_t kCtxLr = 0x0C;
+constexpr uint32_t kCtxCtr = 0x10;
+constexpr uint32_t kCtxGpr = 0x18;
+constexpr uint32_t kCtxCr = 0x118;
+constexpr uint32_t kCtxXer = 0x11C;
+constexpr uint32_t kCtxFpr = 0x128;
+constexpr uint32_t kCtxVr = 0x240;
+
+class UserModeCodeModule : public cpu::Module {
+ public:
+  explicit UserModeCodeModule(cpu::Processor* processor)
+      : cpu::Module(processor) {}
+  const std::string& name() const override {
+    static const std::string name = "xefu user mode";
+    return name;
+  }
+  bool is_executable() const override { return false; }
+  bool ContainsAddress(uint32_t address) override {
+    return address >= kUserCodeLow && address < kUserCodeHigh;
+  }
+
+ protected:
+  std::unique_ptr<cpu::Function> CreateFunction(uint32_t address) override {
+    return std::unique_ptr<cpu::Function>(
+        processor_->backend()->CreateGuestFunction(this, address));
+  }
+};
+
+struct UserModeExit {
+  uint32_t status;
+};
+
+struct UserModeState {
+  uint32_t handler = 0;
+  uint32_t frame = 0;  // trap frame, kernel memory
+  cpu::ppc::PPCContext kernel_regs;
+  cpu::ppc::PPCContext user_regs;
+};
+
+static uint8_t* g_alias_base = nullptr;
+static uint32_t g_alias_entries[0x100] = {};
+static thread_local UserModeState* t_user_mode = nullptr;
+static std::atomic<uint32_t> g_syscall_logs{0};
+
+static void SetCrFromValue(cpu::ppc::PPCContext* pc, uint32_t cr) {
+  auto fields = reinterpret_cast<uint8_t*>(&pc->cr0.value);
+  for (int i = 0; i < 8; ++i) {
+    uint32_t field = (cr >> (28 - 4 * i)) & 0xF;
+    fields[i * 4 + 0] = (field >> 3) & 1;
+    fields[i * 4 + 1] = (field >> 2) & 1;
+    fields[i * 4 + 2] = (field >> 1) & 1;
+    fields[i * 4 + 3] = field & 1;
+  }
+}
+static uint32_t XerValue(const cpu::ppc::PPCContext* pc) {
+  return (uint32_t(pc->xer_so & 1) << 31) | (uint32_t(pc->xer_ov & 1) << 30) |
+         (uint32_t(pc->xer_ca & 1) << 29);
+}
+static void SetXer(cpu::ppc::PPCContext* pc, uint32_t xer) {
+  pc->xer_so = (xer >> 31) & 1;
+  pc->xer_ov = (xer >> 30) & 1;
+  pc->xer_ca = (xer >> 29) & 1;
+}
+
+// Brings the alias space in line with xefu's page table.
+static bool SyncUserSpace() {
+  auto memory = kernel_memory();
+  if (!g_alias_base) {
+    g_alias_base = memory->CreateAliasSpace();
+    if (!g_alias_base) {
+      return false;
+    }
+    memory->SetCodeAliasRange(g_alias_base, kUserCodeLow, kUserCodeHigh);
+    auto processor = kernel_state()->processor();
+    processor->AddModule(std::make_unique<UserModeCodeModule>(processor));
+  }
   for (uint32_t seg = 0; seg < 0x100; ++seg) {
     uint32_t entry = UserSegmentEntry(seg);
-    if (entry) {
-      XELOGW(
-          "BACKCOMPAT   user segment {:02X}000000 -> physical {:08X} "
-          "(entry {:08X})",
-          seg, entry & 0x1F000000u, entry);
+    if (entry == g_alias_entries[seg]) {
+      continue;
     }
-  }
-  // The code and data the user context points at, through the kernel view.
-  if (heap && heap->QueryProtect(context, &protect) &&
-      (protect & kMemoryProtectRead)) {
-    auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(context);
-    for (uint32_t off : {0x08u, 0x2Cu, 0x54u, 0x10Cu, 0x11Cu}) {
-      uint32_t user = xe::load_and_swap<uint32_t>(p + off);
-      uint32_t kernel = UserToKernelAddress(user);
-      XELOGW("BACKCOMPAT   context+{:X}: user {:08X} -> kernel {:08X}", off,
-             user, kernel);
-      if (kernel) {
-        DumpGuest(fmt::format("user {:08X}", user).c_str(), kernel,
-                  off == 0x08 ? 0x800u : 0x100u);
+    if (g_alias_entries[seg]) {
+      memory->UnmapAliasRange(g_alias_base, seg << 24, 0x01000000);
+    }
+    g_alias_entries[seg] = 0;
+    if (entry) {
+      if (memory->MapAliasRange(g_alias_base, seg << 24, 0x01000000,
+                                entry & 0x1F000000u)) {
+        g_alias_entries[seg] = entry;
+        XELOGI("BACKCOMPAT user segment {:02X}000000 -> physical {:08X}", seg,
+               entry & 0x1F000000u);
       }
     }
   }
-  return X_STATUS_SUCCESS;
+  return true;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeEnterUserMode, kNone, kStub);
+
+static void WriteFrame(UserModeState* st, uint32_t iar) {
+  auto f = kernel_memory()->TranslateVirtual<uint8_t*>(st->frame);
+  std::memset(f, 0, kFrameSize);
+  const auto& u = st->user_regs;
+  for (int n = 0; n < 32; ++n) {
+    xe::store_and_swap<uint64_t>(f + kFrameGpr + 8 * n, u.r[n]);
+  }
+  xe::store_and_swap<uint64_t>(f + kFrameCtr, u.ctr);
+  xe::store_and_swap<uint32_t>(f + kFrameLr, uint32_t(u.lr));
+  xe::store_and_swap<uint32_t>(f + kFrameIar, iar);
+  xe::store_and_swap<uint32_t>(f + kFrameCr, uint32_t(u.cr()));
+  xe::store_and_swap<uint32_t>(f + kFrameXer, XerValue(&u));
+}
+
+static uint32_t ReadFrame(UserModeState* st, cpu::ppc::PPCContext* pc) {
+  auto f = kernel_memory()->TranslateVirtual<const uint8_t*>(st->frame);
+  for (int n = 0; n < 32; ++n) {
+    pc->r[n] = xe::load_and_swap<uint64_t>(f + kFrameGpr + 8 * n);
+  }
+  pc->ctr = xe::load_and_swap<uint64_t>(f + kFrameCtr);
+  pc->lr = xe::load_and_swap<uint32_t>(f + kFrameLr);
+  SetCrFromValue(pc, xe::load_and_swap<uint32_t>(f + kFrameCr));
+  SetXer(pc, xe::load_and_swap<uint32_t>(f + kFrameXer));
+  return xe::load_and_swap<uint32_t>(f + kFrameIar);
+}
+
+// `sc` from user code: hand it to xefu as (record = null, trap frame).
+static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
+  UserModeState* st = t_user_mode;
+  if (!st || pc->virtual_membase != g_alias_base) {
+    return false;
+  }
+  uint32_t sc_address = uint32_t(pc->sc_address);
+  if (g_syscall_logs.fetch_add(1) < 200) {
+    XELOGI("BACKCOMPAT syscall r0={:X} at {:08X} (r3={:08X} r4={:08X})",
+           uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
+           uint32_t(pc->r[4]));
+  }
+  std::memcpy(&st->user_regs, pc, sizeof(*pc));
+  WriteFrame(st, sc_address);
+
+  // Run the handler as kernel code: kernel registers and memory view.
+  uint64_t kernel_r1 = st->kernel_regs.r[1];
+  std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
+  pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
+  uint64_t args[] = {0, st->frame};
+  auto thread = XThread::GetCurrentThread();
+  kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
+                                       args, xe::countof(args));
+
+  // Back to user mode with whatever the handler left in the frame.
+  std::memcpy(pc, &st->user_regs, sizeof(*pc));
+  uint32_t iar = ReadFrame(st, pc);
+  pc->virtual_membase = g_alias_base;
+  pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
+  return true;
+}
+
+dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
+  // r3: CONTEXT with the starting state, r4: xefu's handler.
+  LogBackcompatCall("KeEnterUserMode", ctx);
+  uint32_t context = uint32_t(ctx->r[3]);
+  if (!context || !SyncUserSpace()) {
+    return X_STATUS_UNSUCCESSFUL;
+  }
+  cpu::ppc::g_user_mode_syscall_hook = UserModeSyscallHook;
+
+  auto thread = XThread::GetCurrentThread();
+  auto thread_state = thread->thread_state();
+  auto pc = thread_state->context();
+
+  auto st = std::make_unique<UserModeState>();
+  st->handler = uint32_t(ctx->r[4]);
+  st->frame = kernel_memory()->SystemHeapAlloc(kFrameSize);
+  std::memcpy(&st->kernel_regs, pc, sizeof(*pc));
+
+  // Load the user registers from the CONTEXT.
+  auto c = kernel_memory()->TranslateVirtual<const uint8_t*>(context);
+  uint32_t iar = xe::load_and_swap<uint32_t>(c + kCtxIar);
+  pc->lr = xe::load_and_swap<uint32_t>(c + kCtxLr);
+  pc->ctr = xe::load_and_swap<uint64_t>(c + kCtxCtr);
+  for (int n = 0; n < 32; ++n) {
+    pc->r[n] = xe::load_and_swap<uint64_t>(c + kCtxGpr + 8 * n);
+  }
+  SetCrFromValue(pc, xe::load_and_swap<uint32_t>(c + kCtxCr));
+  SetXer(pc, xe::load_and_swap<uint32_t>(c + kCtxXer));
+  for (int n = 0; n < 32; ++n) {
+    uint64_t bits = xe::load_and_swap<uint64_t>(c + kCtxFpr + 8 * n);
+    std::memcpy(&pc->f[n], &bits, 8);
+  }
+  for (int n = 0; n < 128; ++n) {
+    for (int w = 0; w < 4; ++w) {
+      pc->v[n].u32[w] =
+          xe::load_and_swap<uint32_t>(c + kCtxVr + 16 * n + 4 * w);
+    }
+  }
+  pc->sc_resume = 0;
+  pc->virtual_membase = g_alias_base;
+  XELOGI("BACKCOMPAT entering user mode at {:08X} (r1={:08X} r2={:08X})", iar,
+         uint32_t(pc->r[1]), uint32_t(pc->r[2]));
+
+  UserModeState* previous = t_user_mode;
+  t_user_mode = st.get();
+  uint32_t status = X_STATUS_SUCCESS;
+  try {
+    kernel_state()->processor()->ExecuteRaw(thread_state, iar);
+    XELOGW("BACKCOMPAT user mode code returned to the kernel");
+  } catch (const UserModeExit& exit) {
+    status = exit.status;
+  }
+  t_user_mode = previous;
+  std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
+  kernel_memory()->SystemHeapFree(st->frame);
+  XELOGI("BACKCOMPAT left user mode, status {:08X}", status);
+  return status;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeEnterUserMode, kNone, kSketchy);
 
 dword_result_t KeLeaveUserMode_entry(const ppc_context_t& ctx) {
   LogBackcompatCall("KeLeaveUserMode", ctx);
+  if (t_user_mode) {
+    throw UserModeExit{uint32_t(ctx->r[3])};
+  }
   return X_STATUS_SUCCESS;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeLeaveUserMode, kNone, kStub);
+DECLARE_XBOXKRNL_EXPORT1(KeLeaveUserMode, kNone, kSketchy);
 
 dword_result_t KeFlushUserModeCurrentTb_entry(const ppc_context_t& ctx) {
   LogBackcompatCall("KeFlushUserModeCurrentTb", ctx);
+  SyncUserSpace();
   return X_STATUS_SUCCESS;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kNone, kStub);
+DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kNone, kSketchy);
 
 dword_result_t KeFlushCurrentEntireTb_entry(const ppc_context_t& ctx) {
   LogBackcompatCall("KeFlushCurrentEntireTb", ctx);
+  if (g_alias_base) {
+    SyncUserSpace();
+  }
   return X_STATUS_SUCCESS;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kNone, kStub);
+DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kNone, kSketchy);
 
 dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
   // xefu calls this after writing newly translated code. Xenia will need to

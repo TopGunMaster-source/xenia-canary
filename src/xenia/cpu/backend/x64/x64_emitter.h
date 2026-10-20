@@ -197,6 +197,14 @@ class XbyakAllocator : public Xbyak::Allocator {
   virtual bool useProtect() const { return false; }
 };
 
+// Guest addresses covered by the code cache's indirection table.
+constexpr uint32_t kIndirectionTableGuestLow = 0x80000000;
+constexpr uint32_t kIndirectionTableGuestHigh = 0xA0000000;
+inline bool IsInIndirectionTable(uint32_t guest_address) {
+  return guest_address >= kIndirectionTableGuestLow &&
+         guest_address < kIndirectionTableGuestHigh;
+}
+
 class X64Emitter;
 using TailEmitCallback = std::function<void(X64Emitter& e, Xbyak::Label& lbl)>;
 struct TailEmitter {

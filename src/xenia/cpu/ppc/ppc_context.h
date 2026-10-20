@@ -430,6 +430,12 @@ typedef struct alignas(64) PPCContext_s {
   ThreadState* thread_state;
   uint8_t* virtual_membase;
 
+  // Emulated user mode (backward compatibility): the address of the `sc`
+  // being handled, and where to continue after it if not the next
+  // instruction (0 = next instruction). Set around the syscall handler.
+  uint64_t sc_address;
+  uint64_t sc_resume;
+
   template <typename T = uint8_t*>
   inline T TranslateVirtual(uint32_t guest_address) XE_RESTRICT const {
     static_assert(std::is_pointer_v<T>);

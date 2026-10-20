@@ -706,7 +706,8 @@ void X64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
     }
 
     return;
-  } else if (code_cache_->has_indirection_table()) {
+  } else if (code_cache_->has_indirection_table() &&
+             IsInIndirectionTable(function->address())) {
     // Load the pointer to the indirection table maintained in X64CodeCache.
     // The target dword will either contain the address of the generated code
     // or a thunk to ResolveAddress.
@@ -755,7 +756,22 @@ void X64Emitter::CallIndirect(const hir::Instr* instr,
     if (reg.cvt32() != ebx) {
       mov(ebx, reg.cvt32());
     }
+    // Targets outside the table (code in an emulated user mode's address
+    // space) are resolved the slow way; looking them up in the table would
+    // read whatever host memory lies at that address.
+    Xbyak::Label resolve_slow, resolved;
+    lea(eax, ptr[ebx - static_cast<int32_t>(kIndirectionTableGuestLow)]);
+    cmp(eax, static_cast<int32_t>(kIndirectionTableGuestHigh -
+                                  kIndirectionTableGuestLow));
+    jae(resolve_slow, CodeGenerator::T_NEAR);
     mov(eax, dword[ebx]);
+    jmp(resolved, CodeGenerator::T_NEAR);
+    L(resolve_slow);
+    mov(edx, ebx);
+    mov(rax, reinterpret_cast<uint64_t>(ResolveFunction));
+    mov(rcx, GetContextReg());
+    call(rax);
+    L(resolved);
   } else {
     // Old-style resolve.
     // Not too important because indirection table is almost always available.
