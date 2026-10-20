@@ -426,10 +426,14 @@ static bool UserModeFaultCallback(Exception* ex, void* data);
 // xefu's page table structure (at KeCreateUserMode's r4), as observed:
 // * +0x400 + 4 * n: 16 MB pages for user segment n (n << 24): physical frame
 //   in the top byte, PowerPC page attributes in the low bits (PP in bits 0-1).
-// * +0x800 + 2 * r: for each 128 MB region r (r << 27), the physical address
-//   >> 13 of a table of 2048 32-bit entries mapping it in 64 KB pages
-//   (physical page | attributes); 0 if the region has none. This is how the
-//   Xbox's RAM (user 0x80000000+) is mapped.
+// * +0x840 + (address >> 28): page size of each 256 MB: bit 1 set for 64 KB
+//   pages, else 4 KB pages.
+// * 64 KB pages: +0x800 + 2 * (address >> 27), for each 128 MB, the physical
+//   address >> 13 of a table of 2048 32-bit entries (physical page |
+//   attributes); 0 if none. This is how the Xbox's RAM (user 0x80000000+) is
+//   mapped.
+// * 4 KB pages: +2 * (address >> 23), for each 8 MB, the same for a table of
+//   2048 4 KB pages.
 // PP 2 is read/write for user mode, 1 and 3 read only, 0 no access.
 constexpr uint32_t kUserPageShift = 16;
 constexpr uint32_t kUserPageCount = 1u << (32 - kUserPageShift);
@@ -502,52 +506,87 @@ static bool SyncUserSpace() {
     }
   }
 
-  // 64 KB pages: one view per page.
+  // 64 KB and 4 KB pages, one view per 64 KB.
   static std::atomic<uint32_t> page_logs{0};
   uint32_t mapped = 0, unmapped = 0;
-  for (uint32_t region = 0; region < 32; ++region) {
-    uint32_t table_page =
-        xe::load_and_swap<uint16_t>(table + 0x800 + 2 * region);
-    auto entries = table_page ? memory->TranslatePhysical<const uint8_t*>(
-                                    uint32_t(table_page) << 13)
-                              : nullptr;
-    for (uint32_t n = 0; n < 2048; ++n) {
-      uint32_t page = (region << 11) | n;
-      uint32_t address = page << kUserPageShift;
-      if (g_alias_entries[address >> 24]) {
-        continue;  // covered by a 16 MB page
-      }
-      uint32_t want = 0;
-      if (entries) {
-        uint32_t entry = xe::load_and_swap<uint32_t>(entries + 4 * n);
+  for (uint32_t page = 0; page < kUserPageCount; ++page) {
+    uint32_t address = page << kUserPageShift;
+    if (g_alias_entries[address >> 24]) {
+      continue;  // covered by a 16 MB page
+    }
+    uint32_t want = 0;
+    if (table[0x840 + (address >> 28)] & 2) {
+      // 64 KB pages: a table per 128 MB.
+      uint32_t table_page =
+          xe::load_and_swap<uint16_t>(table + 0x800 + 2 * (address >> 27));
+      if (table_page) {
+        auto entries = memory->TranslatePhysical<const uint8_t*>(
+            uint32_t(table_page) << 13);
+        uint32_t entry = xe::load_and_swap<uint32_t>(
+            entries + 4 * ((address >> 16) & 0x7FF));
         if (entry) {
           want = PageMappingFromEntry(entry, entry & 0x1FFF0000u);
         }
       }
-      if (want && address >= 0xE0000000u) {
-        // Xenia offsets host addresses of 0xE0000000+ by 4 KB, which a 64 KB
-        // view can't follow; not supported yet.
-        if (page_logs.fetch_add(1) < 4) {
-          XELOGW("BACKCOMPAT not mapping user page {:08X} (0xE0000000+)",
-                 address);
+    } else {
+      // 4 KB pages: a table per 8 MB. A host view is 64 KB, so the 16 pages
+      // here map as one if they're physically contiguous and 64 KB aligned
+      // (unmapped ones then become accessible).
+      uint32_t table_page =
+          xe::load_and_swap<uint16_t>(table + 2 * (address >> 23));
+      if (table_page) {
+        auto entries = memory->TranslatePhysical<const uint8_t*>(
+            uint32_t(table_page) << 13);
+        uint32_t base = 0, access = 0;
+        bool consistent = true;
+        for (uint32_t k = 0; k < 16; ++k) {
+          uint32_t entry = xe::load_and_swap<uint32_t>(
+              entries + 4 * (((address >> 12) & 0x7FF) + k));
+          uint32_t mapping = entry ? PageMappingFromEntry(entry, 0) : 0;
+          if (!mapping) {
+            continue;
+          }
+          uint32_t page_base = (entry & 0x1FFFF000u) - (k << 12);
+          if (!access) {
+            base = page_base;
+          } else if (page_base != base) {
+            consistent = false;
+          }
+          access = std::max(access, mapping);
         }
-        want = 0;
+        if (access && consistent && !(base & 0xFFFF)) {
+          want = base | access;
+        } else if (access && page_logs.fetch_add(1) < 20) {
+          XELOGW(
+              "BACKCOMPAT can't map user 4 KB pages at {:08X} as 64 KB "
+              "(physical {:08X}{})",
+              address, base, consistent ? ", unaligned" : ", scattered");
+        }
       }
-      uint32_t have = g_alias_pages[page];
-      if (want == have) {
-        continue;
+    }
+    if (want && address >= 0xE0000000u) {
+      // Xenia offsets host addresses of 0xE0000000+ by 4 KB, which a 64 KB
+      // view can't follow; not supported yet.
+      if (page_logs.fetch_add(1) < 20) {
+        XELOGW("BACKCOMPAT not mapping user page {:08X} (0xE0000000+)",
+               address);
       }
-      if (have) {
-        memory->UnmapAliasRange(g_alias_base, address, 1u << kUserPageShift);
-        ++unmapped;
-      }
-      g_alias_pages[page] = 0;
-      if (want &&
-          memory->MapAliasRange(g_alias_base, address, 1u << kUserPageShift,
-                                want & ~3u, (want & 3) == 2)) {
-        g_alias_pages[page] = want;
-        ++mapped;
-      }
+      want = 0;
+    }
+    uint32_t have = g_alias_pages[page];
+    if (want == have) {
+      continue;
+    }
+    if (have) {
+      memory->UnmapAliasRange(g_alias_base, address, 1u << kUserPageShift);
+      ++unmapped;
+    }
+    g_alias_pages[page] = 0;
+    if (want &&
+        memory->MapAliasRange(g_alias_base, address, 1u << kUserPageShift,
+                              want & ~3u, (want & 3) == 2)) {
+      g_alias_pages[page] = want;
+      ++mapped;
     }
   }
   if ((mapped || unmapped) && page_logs.fetch_add(1) < 40) {
@@ -627,6 +666,32 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   return true;
 }
 
+static void DescribeUserMapping(uint32_t address) {
+  if (!g_user_page_table) {
+    return;
+  }
+  auto memory = kernel_memory();
+  auto table = memory->TranslateVirtual<const uint8_t*>(g_user_page_table);
+  uint8_t size = table[0x840 + (address >> 28)];
+  uint32_t segment = UserSegmentEntry(address >> 24);
+  bool large = size & 2;
+  uint32_t table_page = xe::load_and_swap<uint16_t>(
+      table + (large ? 0x800 + 2 * (address >> 27) : 2 * (address >> 23)));
+  uint32_t entry = 0;
+  if (table_page) {
+    auto entries =
+        memory->TranslatePhysical<const uint8_t*>(uint32_t(table_page) << 13);
+    entry = xe::load_and_swap<uint32_t>(
+        entries +
+        4 * (large ? (address >> 16) & 0x7FF : (address >> 12) & 0x7FF));
+  }
+  XELOGW(
+      "BACKCOMPAT mapping of {:08X}: 16 MB entry {:08X}, page size {:02X}, "
+      "table {:08X}, entry {:08X}, Xenia view {:08X}",
+      address, segment, size, uint32_t(table_page) << 13, entry,
+      g_alias_pages.empty() ? 0 : g_alias_pages[address >> kUserPageShift]);
+}
+
 static std::atomic<uint32_t> g_fault_logs{0};
 
 // A fault in user code (taken in the host exception handler, below): hand
@@ -638,6 +703,17 @@ static std::atomic<uint32_t> g_fault_logs{0};
   if (g_fault_logs.fetch_add(1) < 200) {
     XELOGI("BACKCOMPAT fault at {:08X}: {} {:08X}", fault.iar,
            fault.is_write ? "write" : "read", fault.address);
+  }
+  // A fault that keeps coming back: say how xefu's tables map the address.
+  static uint32_t last_iar = 0, last_address = 0, repeats = 0;
+  if (fault.iar == last_iar && fault.address == last_address) {
+    if (++repeats == 3) {
+      DescribeUserMapping(fault.address);
+    }
+  } else {
+    last_iar = fault.iar;
+    last_address = fault.address;
+    repeats = 0;
   }
   auto r = kernel_memory()->TranslateVirtual<uint8_t*>(st->record);
   std::memset(r, 0, kRecordSize);
