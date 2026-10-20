@@ -224,14 +224,58 @@ static void LogBackcompatCall(const char* name, const ppc_context_t& ctx,
   }
 }
 
+static void DumpGuest(const char* label, uint32_t addr, uint32_t len) {
+  addr &= ~3u;
+  auto heap = addr ? kernel_memory()->LookupHeap(addr) : nullptr;
+  uint32_t protect = 0, last_protect = 0;
+  if (!heap || !heap->QueryProtect(addr, &protect) ||
+      !(protect & kMemoryProtectRead) ||
+      !heap->QueryProtect(addr + len - 1, &last_protect) ||
+      !(last_protect & kMemoryProtectRead)) {
+    XELOGW("BACKCOMPAT   {} @{:08X}: not mapped", label, addr);
+    return;
+  }
+  auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(addr);
+  for (uint32_t off = 0; off < len; off += 32) {
+    std::string line;
+    bool nonzero = false;
+    for (uint32_t i = 0; i < 32; i += 4) {
+      uint32_t v = xe::load_and_swap<uint32_t>(p + off + i);
+      nonzero |= v != 0;
+      line += fmt::format(" {:08X}", v);
+    }
+    if (nonzero) {
+      XELOGW("BACKCOMPAT   {} @{:08X}:{}", label, addr + off, line);
+    }
+  }
+}
+
 dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("KeCreateUserMode", ctx, 4, 0x800);
+  LogBackcompatCall("KeCreateUserMode", ctx);
+  DumpGuest("r4", uint32_t(ctx->r[4]), 0x1000);
+  DumpGuest("r6", uint32_t(ctx->r[6]), 0x800);
+  DumpGuest("r7", uint32_t(ctx->r[7]), 0x800);
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeCreateUserMode, kNone, kStub);
 
 dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("KeEnterUserMode", ctx, 3, 0x100);
+  // r3: the user-mode starting context (0xA40 bytes), r4: xefu's handler.
+  LogBackcompatCall("KeEnterUserMode", ctx);
+  uint32_t context = uint32_t(ctx->r[3]);
+  DumpGuest("context", context, 0x600);
+  auto heap = context ? kernel_memory()->LookupHeap(context) : nullptr;
+  uint32_t protect = 0;
+  if (heap && heap->QueryProtect(context, &protect) &&
+      (protect & kMemoryProtectRead)) {
+    auto p = kernel_memory()->TranslateVirtual<const uint8_t*>(context);
+    // Whatever the layout, look at what the first pointer-like words hold.
+    for (uint32_t off : {0x08u, 0x0Cu, 0x2Cu, 0x54u}) {
+      uint32_t target = xe::load_and_swap<uint32_t>(p + off);
+      DumpGuest(fmt::format("context+{:X}->", off).c_str(), target, 0x200);
+    }
+  }
+  DumpGuest("handler", uint32_t(ctx->r[4]), 0x80);
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeEnterUserMode, kNone, kStub);
