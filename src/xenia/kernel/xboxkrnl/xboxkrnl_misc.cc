@@ -617,7 +617,9 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
            uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
            uint32_t(pc->r[4]));
   }
-  uint32_t iar = RunUserModeHandler(st, pc, 0, sc_address);
+  // Like SRR0 for a system call, the frame's IAR is the instruction after
+  // the sc; xefu leaves it there to return normally.
+  uint32_t iar = RunUserModeHandler(st, pc, 0, sc_address + 4);
   pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
   return true;
 }
