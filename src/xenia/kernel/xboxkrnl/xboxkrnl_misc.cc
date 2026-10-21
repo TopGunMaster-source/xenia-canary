@@ -741,6 +741,27 @@ static std::atomic<cpu::ppc::PPCContext*> g_user_context{nullptr};
 static std::atomic<uint32_t> g_user_interrupt_frame{0};
 static std::atomic<uint32_t> g_interrupt_flags{0};
 
+// xefu's state block (at user 0xB7000000), or null if it isn't mapped yet.
+// +0xA4: the x86 EFLAGS (IF is 0x200); +0x254: the interrupt-pending byte.
+static bool TranslateUserAddress(uint32_t address, bool write,
+                                 uint32_t* physical_out);
+static volatile uint8_t* UserStateBlock() {
+  static std::atomic<uint32_t> physical{0};
+  uint32_t address = physical.load();
+  if (!address) {
+    if (!TranslateUserAddress(0xB7000000u, false, &address)) {
+      return nullptr;
+    }
+    physical.store(address);
+  }
+  return kernel_memory()->TranslatePhysical<volatile uint8_t*>(address);
+}
+static bool UserInterruptDeliverable(volatile uint8_t* state) {
+  uint32_t eflags =
+      xe::load_and_swap<uint32_t>(const_cast<const uint8_t*>(state + 0xA4));
+  return state[0x254] && (eflags & 0x200);
+}
+
 static void PropagateUserInterruptFlag() {
   uint32_t frame = g_user_interrupt_frame.load();
   auto pc = g_user_context.load();
@@ -752,8 +773,24 @@ static void PropagateUserInterruptFlag() {
   uint32_t value = *cr;
   if (value & kCrInterruptBit) {
     *cr = value & ~kCrInterruptBit;
+    // The flag tells user code an interrupt is pending; code that sees it
+    // stops what it's doing (a copy in xefu's runtime returns early, leaving
+    // the rest for after the interrupt) and goes to xefu's dispatcher, which
+    // carries on as if nothing happened if no interrupt is pending after all.
+    // The 360 only sets it on the way back to user mode; set from here, it
+    // could outlive the interrupt (taken meanwhile when user code enables
+    // interrupts, or disabled since), and a copy would stop half done. So
+    // only while one is pending and interrupts are enabled.
+    volatile uint8_t* state = UserStateBlock();
+    if (state && !UserInterruptDeliverable(state)) {
+      return;
+    }
     // cr1.lt: the byte for CR bit 4.
-    reinterpret_cast<volatile uint8_t*>(&pc->cr0)[4] = 1;
+    auto flag = reinterpret_cast<volatile uint8_t*>(&pc->cr0) + 4;
+    *flag = 1;
+    if (state && !UserInterruptDeliverable(state)) {
+      *flag = 0;
+    }
     g_interrupt_flags.fetch_add(1);
   }
 }
