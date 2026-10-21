@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1107,6 +1110,7 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
 // stretch shows whether the game is progressing (the x86 EIP is in r2) or
 // stuck.
 static std::atomic<uint32_t> g_sweep_count{0};
+static std::atomic<uint32_t> g_timer_dpc_count{0};
 static std::atomic<cpu::ppc::PPCContext*> g_heartbeat_context{nullptr};
 
 static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
@@ -1125,9 +1129,9 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
       uint32_t eip = uint32_t(pc->r[2]);
       XELOGI(
           "BACKCOMPAT heartbeat: x86 EIP {:08X} ESP {:08X}, {} system calls, "
-          "{} faults, {} code sweeps",
+          "{} faults, {} code sweeps, {} timer DPCs",
           eip, uint32_t(pc->r[7]), g_syscall_logs.load(), g_fault_logs.load(),
-          g_sweep_count.load());
+          g_sweep_count.load(), g_timer_dpc_count.load());
       // Where it seems to stay: the x86 code around it and the registers.
       static uint32_t last_eip = 0, dumps = 0;
       if (eip == last_eip && dumps < 3) {
@@ -1404,19 +1408,145 @@ dword_result_t IoDismountVolumeByFileHandle_entry(const ppc_context_t& ctx) {
 }
 DECLARE_XBOXKRNL_EXPORT1(IoDismountVolumeByFileHandle, kFileSystem, kStub);
 
-dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
-  // KeSetTimerEx(timer, due_time, period, dpc): not yet backed by a real
-  // timer; returns "timer was not already set".
-  LogBackcompatCall("KeSetTimerEx", ctx);
+// Kernel timers with DPCs (KeSetTimerEx / KeCancelTimer), which xefu uses to
+// drive the emulated Xbox's timer interrupt. A host thread with a guest
+// context runs each timer's DPC routine when it expires, and rearms periodic
+// ones. The timer's signal state is set too, for anything waiting on it.
+struct PendingKernelTimer {
+  uint32_t timer;
+  uint32_t dpc;
+  std::chrono::steady_clock::time_point due;
+  std::chrono::milliseconds period;
+};
+static std::mutex g_kernel_timer_mutex;
+static std::condition_variable g_kernel_timer_cv;
+static std::vector<PendingKernelTimer> g_kernel_timers;
+static object_ref<XHostThread> g_kernel_timer_thread;
+
+static bool RemoveKernelTimer(uint32_t timer) {
+  for (auto it = g_kernel_timers.begin(); it != g_kernel_timers.end(); ++it) {
+    if (it->timer == timer) {
+      g_kernel_timers.erase(it);
+      return true;
+    }
+  }
+  return false;
+}
+
+static int KernelTimerThreadMain() {
+  auto thread = XThread::GetCurrentThread();
+  auto thread_state = thread->thread_state();
+  auto memory = kernel_memory();
+  while (true) {
+    PendingKernelTimer fired;
+    {
+      std::unique_lock<std::mutex> lock(g_kernel_timer_mutex);
+      while (true) {
+        auto now = std::chrono::steady_clock::now();
+        auto next = g_kernel_timers.end();
+        for (auto it = g_kernel_timers.begin(); it != g_kernel_timers.end();
+             ++it) {
+          if (next == g_kernel_timers.end() || it->due < next->due) {
+            next = it;
+          }
+        }
+        if (next == g_kernel_timers.end()) {
+          g_kernel_timer_cv.wait(lock);
+          continue;
+        }
+        if (next->due > now) {
+          g_kernel_timer_cv.wait_until(lock, next->due);
+          continue;
+        }
+        fired = *next;
+        if (next->period.count()) {
+          next->due += next->period;
+          if (next->due < now) {
+            next->due = now + next->period;  // don't try to catch up
+          }
+        } else {
+          g_kernel_timers.erase(next);
+        }
+        break;
+      }
+    }
+    auto timer = memory->TranslateVirtual<X_KTIMER*>(fired.timer);
+    timer->header.signal_state = 1;
+    if (!fired.dpc) {
+      continue;
+    }
+    auto dpc = memory->TranslateVirtual<XDPC*>(fired.dpc);
+    uint32_t routine = dpc->routine;
+    if (!routine) {
+      continue;
+    }
+    if (g_timer_dpc_count.fetch_add(1) < 5) {
+      XELOGI("BACKCOMPAT timer {:08X} fired: DPC {:08X} routine {:08X}",
+             fired.timer, fired.dpc, routine);
+    }
+    auto ppc_context = thread_state->context();
+    DPCImpersonationScope dpc_scope{};
+    kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
+    uint64_t args[] = {fired.dpc, uint32_t(dpc->context), 0, 0};
+    kernel_state()->processor()->Execute(thread_state, routine, args,
+                                         xe::countof(args));
+    kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
+  }
   return 0;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeSetTimerEx, kThreading, kStub);
+
+dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
+  // KeSetTimerEx(timer, due_time, period in ms, dpc). Due time: negative is
+  // relative, in 100 ns units; positive is absolute system time.
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 10) {
+    LogBackcompatCall("KeSetTimerEx", ctx);
+  }
+  uint32_t timer = uint32_t(ctx->r[3]);
+  int64_t due_time = int64_t(ctx->r[4]);
+  int32_t period = int32_t(ctx->r[5]);
+  uint32_t dpc = uint32_t(ctx->r[6]);
+  auto now = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point due = now;
+  if (due_time < 0) {
+    due = now + std::chrono::microseconds(-due_time / 10);
+  } else {
+    int64_t delta = due_time - int64_t(Clock::QueryGuestSystemTime());
+    if (delta > 0) {
+      due = now + std::chrono::microseconds(delta / 10);
+    }
+  }
+  auto header = &kernel_memory()->TranslateVirtual<X_KTIMER*>(timer)->header;
+  header->signal_state = 0;
+  bool was_set;
+  {
+    std::lock_guard<std::mutex> lock(g_kernel_timer_mutex);
+    was_set = RemoveKernelTimer(timer);
+    g_kernel_timers.push_back(
+        {timer, dpc, due, std::chrono::milliseconds(std::max(period, 0))});
+    if (!g_kernel_timer_thread) {
+      g_kernel_timer_thread = object_ref<XHostThread>(
+          new XHostThread(kernel_state(), 128 * 1024, 0, KernelTimerThreadMain,
+                          kernel_state()->GetSystemProcess()));
+      g_kernel_timer_thread->set_name("Kernel Timer DPCs");
+      g_kernel_timer_thread->Create();
+    }
+  }
+  g_kernel_timer_cv.notify_all();
+  return was_set ? 1 : 0;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSetTimerEx, kThreading, kSketchy);
 
 dword_result_t KeCancelTimer_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("KeCancelTimer", ctx);
-  return 0;
+  bool was_set;
+  {
+    std::lock_guard<std::mutex> lock(g_kernel_timer_mutex);
+    was_set = RemoveKernelTimer(uint32_t(ctx->r[3]));
+  }
+  g_kernel_timer_cv.notify_all();
+  return was_set ? 1 : 0;
 }
-DECLARE_XBOXKRNL_EXPORT1(KeCancelTimer, kThreading, kStub);
+DECLARE_XBOXKRNL_EXPORT1(KeCancelTimer, kThreading, kSketchy);
 
 }  // namespace xboxkrnl
 }  // namespace kernel
