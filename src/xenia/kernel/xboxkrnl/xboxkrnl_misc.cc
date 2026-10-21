@@ -848,6 +848,182 @@ static bool TranslateUserAddress(uint32_t address, bool write,
   return true;
 }
 
+// Copies `size` bytes between user memory (through xefu's page tables) and
+// `bytes`. Fails without touching memory if any byte isn't accessible.
+static bool AccessUserBytes(uint32_t address, uint32_t size, bool write,
+                            uint8_t* bytes) {
+  auto memory = kernel_memory();
+  uint32_t physical[128];
+  if (size > xe::countof(physical)) {
+    return false;
+  }
+  for (uint32_t n = 0; n < size; ++n) {
+    if (!TranslateUserAddress(address + n, write, &physical[n])) {
+      return false;
+    }
+  }
+  for (uint32_t n = 0; n < size; ++n) {
+    auto host = memory->TranslatePhysical<uint8_t*>(physical[n]);
+    if (write) {
+      *host = bytes[n];
+    } else {
+      bytes[n] = *host;
+    }
+  }
+  return true;
+}
+
+// The cache line, floating-point and vector forms of EmulateUserLoadStore
+// (below): dcbz (128 bytes on the 360), lfs/lfd/stfs/stfd and their indexed
+// and update forms, stfiwx, lvx/stvx and their VMX128 forms.
+static bool EmulateUserCacheFloatVector(cpu::ppc::PPCContext* pc,
+                                        uint32_t instr) {
+  uint32_t op = instr >> 26;
+  uint32_t rt = (instr >> 21) & 31;
+  uint32_t ra = (instr >> 16) & 31;
+  uint32_t rb = (instr >> 11) & 31;
+  uint64_t base = ra ? pc->r[ra] : 0;
+  uint32_t address = 0;
+  enum Kind { kNone, kZero, kFloat, kDouble, kFloatWord, kVector } kind = kNone;
+  bool is_load = true, update = false;
+  uint32_t vr = rt;
+  if (op >= 48 && op <= 55) {
+    address = uint32_t(base + int16_t(instr & 0xFFFF));
+    kind = (op & 2) ? kDouble : kFloat;
+    is_load = op < 52;
+    update = op & 1;
+  } else if (op == 31) {
+    address = uint32_t(base + pc->r[rb]);
+    switch ((instr >> 1) & 0x3FF) {
+      case 1014:  // dcbz
+        kind = kZero;
+        break;
+      case 535:    // lfsx
+      case 567:    // lfsux
+      case 599:    // lfdx
+      case 631:    // lfdux
+      case 663:    // stfsx
+      case 695:    // stfsux
+      case 727:    // stfdx
+      case 759: {  // stfdux
+        uint32_t xo = (instr >> 1) & 0x3FF;
+        kind = (xo & 64) ? kDouble : kFloat;
+        is_load = xo < 663;
+        update = xo & 32;
+      } break;
+      case 983:  // stfiwx
+        kind = kFloatWord;
+        is_load = false;
+        break;
+      case 103:  // lvx
+      case 359:  // lvxl
+        kind = kVector;
+        break;
+      case 231:  // stvx
+      case 487:  // stvxl
+        kind = kVector;
+        is_load = false;
+        break;
+      default:
+        return false;
+    }
+  } else if (op == 4) {
+    // VMX128 indexed forms: the register is VD128l | VD128h << 5.
+    uint32_t form = instr & 0x7F3;
+    if (form != 0x0C3 && form != 0x1C3 && form != 0x2C3 && form != 0x3C3) {
+      return false;
+    }
+    address = uint32_t(base + pc->r[rb]);
+    kind = kVector;
+    is_load = form == 0x0C3 || form == 0x2C3;
+    vr = rt | (((instr >> 2) & 3) << 5);
+  } else {
+    return false;
+  }
+  if ((update && !ra) || kind == kNone) {
+    return false;
+  }
+  uint8_t bytes[128] = {};
+  switch (kind) {
+    case kZero:
+      if (!AccessUserBytes(address & ~127u, 128, true, bytes)) {
+        return false;
+      }
+      break;
+    case kFloat:
+      if (is_load) {
+        if (!AccessUserBytes(address, 4, false, bytes)) {
+          return false;
+        }
+        uint32_t bits = xe::load_and_swap<uint32_t>(bytes);
+        float value;
+        std::memcpy(&value, &bits, 4);
+        pc->f[rt] = value;
+      } else {
+        float value = float(pc->f[rt]);
+        uint32_t bits;
+        std::memcpy(&bits, &value, 4);
+        xe::store_and_swap<uint32_t>(bytes, bits);
+        if (!AccessUserBytes(address, 4, true, bytes)) {
+          return false;
+        }
+      }
+      break;
+    case kDouble:
+      if (is_load) {
+        if (!AccessUserBytes(address, 8, false, bytes)) {
+          return false;
+        }
+        uint64_t bits = xe::load_and_swap<uint64_t>(bytes);
+        std::memcpy(&pc->f[rt], &bits, 8);
+      } else {
+        uint64_t bits;
+        std::memcpy(&bits, &pc->f[rt], 8);
+        xe::store_and_swap<uint64_t>(bytes, bits);
+        if (!AccessUserBytes(address, 8, true, bytes)) {
+          return false;
+        }
+      }
+      break;
+    case kFloatWord: {
+      uint64_t bits;
+      std::memcpy(&bits, &pc->f[rt], 8);
+      xe::store_and_swap<uint32_t>(bytes, uint32_t(bits));
+      if (!AccessUserBytes(address, 4, true, bytes)) {
+        return false;
+      }
+    } break;
+    case kVector:
+      address &= ~15u;
+      if (is_load) {
+        if (!AccessUserBytes(address, 16, false, bytes)) {
+          return false;
+        }
+        for (uint32_t n = 0; n < 4; ++n) {
+          pc->v[vr].u32[n] = xe::load_and_swap<uint32_t>(bytes + 4 * n);
+        }
+      } else {
+        for (uint32_t n = 0; n < 4; ++n) {
+          xe::store_and_swap<uint32_t>(bytes + 4 * n, pc->v[vr].u32[n]);
+        }
+        if (!AccessUserBytes(address, 16, true, bytes)) {
+          return false;
+        }
+      }
+      break;
+    default:
+      return false;
+  }
+  if (update) {
+    pc->r[ra] = address;
+  }
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 20) {
+    XELOGI("BACKCOMPAT emulated {:08X} at {:08X}", instr, address);
+  }
+  return true;
+}
+
 // Performs the integer load or store at `iar` (the faulting instruction) on
 // guest physical memory through xefu's page tables, updating the guest
 // registers in `pc`. For user pages Xenia can't map as host views. Returns
@@ -856,6 +1032,9 @@ static bool TranslateUserAddress(uint32_t address, bool write,
 static bool EmulateUserLoadStore(cpu::ppc::PPCContext* pc, uint32_t iar) {
   auto memory = kernel_memory();
   uint32_t instr = xe::load_and_swap<uint32_t>(memory->TranslateCode(iar));
+  if (EmulateUserCacheFloatVector(pc, instr)) {
+    return true;
+  }
   uint32_t op = instr >> 26;
   uint32_t rt = (instr >> 21) & 31;
   uint32_t ra = (instr >> 16) & 31;
