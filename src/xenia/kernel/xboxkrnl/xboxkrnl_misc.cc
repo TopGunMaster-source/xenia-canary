@@ -660,6 +660,25 @@ static void PropagateUserInterruptFlag() {
   }
 }
 
+// A guest call run to completion leaves the host/guest stackpoints as it found
+// them; one that doesn't (guest code that never returned to its caller inside
+// it) would pile them up until they overflow. Restores the depth and says so.
+static void CheckStackpointsAfterCall(cpu::ppc::PPCContext* context,
+                                      uint32_t depth_before, const char* what) {
+  auto backend = kernel_state()->processor()->backend();
+  uint32_t depth_after = backend->GetGuestStackDepth(context);
+  if (depth_after == depth_before) {
+    return;
+  }
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 20) {
+    XELOGW("BACKCOMPAT {} left {} stackpoints (depth {} -> {}), lr={:08X}",
+           what, int32_t(depth_after - depth_before), depth_before, depth_after,
+           uint32_t(context->lr));
+  }
+  backend->SetGuestStackDepth(context, depth_before);
+}
+
 static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
                                    uint32_t record, uint32_t iar) {
   XEFU_PHASE();
@@ -674,8 +693,11 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   uint64_t args[] = {record, st->frame};
   auto thread = XThread::GetCurrentThread();
   XEFU_PHASE();
+  uint32_t stack_depth =
+      kernel_state()->processor()->backend()->GetGuestStackDepth(pc);
   kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
                                        args, xe::countof(args));
+  CheckStackpointsAfterCall(pc, stack_depth, "xefu's user-mode handler");
   XEFU_PHASE();
 
   // Back to user mode with whatever the handler left in the frame.
@@ -1699,8 +1721,11 @@ static int KernelTimerThreadMain() {
     DPCImpersonationScope dpc_scope{};
     kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
     uint64_t args[] = {fired.dpc, uint32_t(dpc->context), 0, 0};
+    uint32_t stack_depth =
+        kernel_state()->processor()->backend()->GetGuestStackDepth(ppc_context);
     kernel_state()->processor()->Execute(thread_state, routine, args,
                                          xe::countof(args));
+    CheckStackpointsAfterCall(ppc_context, stack_depth, "a timer DPC");
     kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
     PropagateUserInterruptFlag();
   }

@@ -1770,8 +1770,29 @@ void X64Emitter::HandleStackpointOverflowError(ppc::PPCContext* context) {
   if (debugging::IsDebuggerAttached()) {
     debugging::Break();
   }
-  // context->lr
-  // todo: show lr in message?
+  // Which thread, and what the stackpoints that piled up are (they name the
+  // guest calls that never returned).
+  auto backend = static_cast<X64Backend*>(context->processor->backend());
+  X64BackendContext* bctx = backend->BackendContextForGuestContext(context);
+  std::string recent;
+  uint32_t depth = bctx->current_stackpoint_depth;
+  for (uint32_t n = 1; n <= 24 && n <= depth; ++n) {
+    const X64BackendStackpoint& sp = bctx->stackpoints[depth - n];
+    recent += fmt::format(" {:08X}/{:08X}", sp.guest_return_address_,
+                          sp.guest_stack_);
+  }
+  std::string oldest;
+  for (uint32_t n = 0; n < 8 && n < depth; ++n) {
+    const X64BackendStackpoint& sp = bctx->stackpoints[n];
+    oldest += fmt::format(" {:08X}/{:08X}", sp.guest_return_address_,
+                          sp.guest_stack_);
+  }
+  XELOGE(
+      "Overflowed stackpoints on thread {:08X}: lr={:08X} r1={:08X}; newest "
+      "(return/stack):{}; oldest:{}",
+      context->thread_id, uint32_t(context->lr), uint32_t(context->r[1]),
+      recent, oldest);
+  FlushLog();
   xe::FatalError(
       "Overflowed stackpoints! Please report this error for this title to "
       "Xenia developers.");
