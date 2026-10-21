@@ -253,133 +253,101 @@ class BigNum {
     return r;
   }
 
+  // a mod m, by Knuth's algorithm D on 32-bit digits (as in Hacker's
+  // Delight's divmnu), so every partial quotient and product fits in 64 bits.
   static BigNum mod(const BigNum& a, const BigNum& m) {
     if (compare(a, m) < 0) {
       return a;
     }
-
-    size_t n = m.limbs.size();
-    size_t total = a.limbs.size();
-
-    if (n == 0 || (n == 1 && m.limbs[0] == 0)) {
+    std::vector<uint32_t> u, v;
+    for (uint64_t limb : a.limbs) {
+      u.push_back(static_cast<uint32_t>(limb));
+      u.push_back(static_cast<uint32_t>(limb >> 32));
+    }
+    for (uint64_t limb : m.limbs) {
+      v.push_back(static_cast<uint32_t>(limb));
+      v.push_back(static_cast<uint32_t>(limb >> 32));
+    }
+    while (u.size() > 1 && u.back() == 0) {
+      u.pop_back();
+    }
+    while (v.size() > 1 && v.back() == 0) {
+      v.pop_back();
+    }
+    size_t un = u.size(), vn = v.size();
+    if (vn == 1 && v[0] == 0) {
       return BigNum();
     }
-
-    if (n == 1) {
-      uint64_t d = m.limbs[0];
-      uint64_t rem = 0;
-      for (size_t i = total; i > 0; i--) {
-        u128 cur = u128_or64(u128_shl(u128_from(rem), 64), a.limbs[i - 1]);
-        u128_div64(cur, d, &rem);
+    std::vector<uint32_t> rem(vn, 0);
+    if (vn == 1) {
+      uint64_t r = 0;
+      for (size_t i = un; i > 0; i--) {
+        r = ((r << 32) | u[i - 1]) % v[0];
       }
-      BigNum r;
-      r.limbs = {rem};
-      r.trim();
-      return r;
-    }
-
-    int shift = 0;
-    uint64_t top = m.limbs[n - 1];
-    if (top != 0) {
-      shift = clz64(top);
-    }
-
-    BigNum u, v;
-    u.limbs.resize(total + 1, 0);
-    if (shift > 0) {
-      uint64_t carry = 0;
-      for (size_t i = 0; i < total; i++) {
-        u128 val = u128_or64(u128_shl(u128_from(a.limbs[i]), shift), carry);
-        u.limbs[i] = val.lo;
-        carry = val.hi;
-      }
-      u.limbs[total] = carry;
+      rem[0] = static_cast<uint32_t>(r);
     } else {
-      for (size_t i = 0; i < total; i++) {
-        u.limbs[i] = a.limbs[i];
+      const uint64_t b = 1ull << 32;
+      int s = clz32(v[vn - 1]);
+      std::vector<uint32_t> vs(vn), us(un + 1);
+      for (size_t i = vn - 1; i > 0; i--) {
+        vs[i] = (v[i] << s) |
+                static_cast<uint32_t>((uint64_t(v[i - 1]) >> (32 - s)) &
+                                      (s ? 0xFFFFFFFFu : 0));
       }
-      u.limbs[total] = 0;
+      vs[0] = v[0] << s;
+      us[un] = static_cast<uint32_t>((uint64_t(u[un - 1]) >> (32 - s)) &
+                                     (s ? 0xFFFFFFFFu : 0));
+      for (size_t i = un - 1; i > 0; i--) {
+        us[i] = (u[i] << s) |
+                static_cast<uint32_t>((uint64_t(u[i - 1]) >> (32 - s)) &
+                                      (s ? 0xFFFFFFFFu : 0));
+      }
+      us[0] = u[0] << s;
+      for (size_t j = un - vn + 1; j > 0; j--) {
+        size_t jj = j - 1;
+        uint64_t num = (uint64_t(us[jj + vn]) << 32) | us[jj + vn - 1];
+        uint64_t qhat = num / vs[vn - 1];
+        uint64_t rhat = num - qhat * vs[vn - 1];
+        while (qhat >= b ||
+               qhat * vs[vn - 2] > ((rhat << 32) | us[jj + vn - 2])) {
+          qhat--;
+          rhat += vs[vn - 1];
+          if (rhat >= b) {
+            break;
+          }
+        }
+        int64_t borrow = 0;
+        int64_t t = 0;
+        for (size_t i = 0; i < vn; i++) {
+          uint64_t p = qhat * vs[i];
+          t = int64_t(us[i + jj]) - borrow - int64_t(p & 0xFFFFFFFFu);
+          us[i + jj] = static_cast<uint32_t>(t);
+          borrow = int64_t(p >> 32) - (t >> 32);
+        }
+        t = int64_t(us[jj + vn]) - borrow;
+        us[jj + vn] = static_cast<uint32_t>(t);
+        if (t < 0) {
+          uint64_t carry = 0;
+          for (size_t i = 0; i < vn; i++) {
+            uint64_t sum = uint64_t(us[i + jj]) + vs[i] + carry;
+            us[i + jj] = static_cast<uint32_t>(sum);
+            carry = sum >> 32;
+          }
+          us[jj + vn] = static_cast<uint32_t>(us[jj + vn] + carry);
+        }
+      }
+      for (size_t i = 0; i < vn - 1; i++) {
+        rem[i] = (us[i] >> s) |
+                 static_cast<uint32_t>((uint64_t(us[i + 1]) << (32 - s)) &
+                                       (s ? 0xFFFFFFFFu : 0));
+      }
+      rem[vn - 1] = us[vn - 1] >> s;
     }
-
-    v.limbs.resize(n, 0);
-    if (shift > 0) {
-      uint64_t carry = 0;
-      for (size_t i = 0; i < n; i++) {
-        u128 val = u128_or64(u128_shl(u128_from(m.limbs[i]), shift), carry);
-        v.limbs[i] = val.lo;
-        carry = val.hi;
-      }
-    } else {
-      v.limbs = m.limbs;
-    }
-
-    uint64_t vn_1 = v.limbs[n - 1];
-    uint64_t vn_2 = (n >= 2) ? v.limbs[n - 2] : 0;
-
-    for (size_t j = total; j >= n; j--) {
-      u128 num_top =
-          u128_or64(u128_shl(u128_from(u.limbs[j]), 64), u.limbs[j - 1]);
-      uint64_t rhat_val;
-      uint64_t qhat_val = u128_div64(num_top, vn_1, &rhat_val);
-
-      while (true) {
-        u128 qv2 = u128_mul64(qhat_val, vn_2);
-        u128 rhs = u128_or64(u128_shl(u128_from(rhat_val), 64), u.limbs[j - 2]);
-        bool gt = (qv2.hi > rhs.hi) || (qv2.hi == rhs.hi && qv2.lo > rhs.lo);
-        if (!gt) {
-          break;
-        }
-        qhat_val--;
-        uint64_t old_rhat = rhat_val;
-        rhat_val += vn_1;
-        if (rhat_val < old_rhat) {
-          break;
-        }
-      }
-
-      uint64_t carry = 0;
-      for (size_t i = 0; i < n; i++) {
-        u128 prod = u128_mul64(qhat_val, v.limbs[i]);
-        prod = u128_add(prod, carry);
-        uint64_t prod_lo = prod.lo;
-        carry = prod.hi;
-        uint64_t u_val = u.limbs[j - n + i];
-        u.limbs[j - n + i] = u_val - prod_lo;
-        if (u_val < prod_lo) {
-          carry++;
-        }
-      }
-      int64_t final_diff =
-          static_cast<int64_t>(u.limbs[j]) - static_cast<int64_t>(carry);
-      u.limbs[j] = static_cast<uint64_t>(final_diff);
-
-      if (final_diff < 0) {
-        uint64_t c = 0;
-        for (size_t i = 0; i < n; i++) {
-          u128 sum = u128_add(u128_from(u.limbs[j - n + i]), v.limbs[i]);
-          sum = u128_add(sum, c);
-          u.limbs[j - n + i] = sum.lo;
-          c = sum.hi;
-        }
-        u.limbs[j] += c;
-      }
-    }
-
     BigNum r;
-    r.limbs.resize(n, 0);
-    if (shift > 0) {
-      uint64_t carry = 0;
-      for (size_t i = n; i > 0; i--) {
-        u128 val = u128_or64(u128_shl(u128_from(carry), 64), u.limbs[i - 1]);
-        r.limbs[i - 1] = u128_shr(val, shift).lo;
-        carry = u.limbs[i - 1] & ((1ULL << shift) - 1);
-      }
-    } else {
-      for (size_t i = 0; i < n; i++) {
-        r.limbs[i] = u.limbs[i];
-      }
+    r.limbs.resize((rem.size() + 1) / 2, 0);
+    for (size_t i = 0; i < rem.size(); i++) {
+      r.limbs[i / 2] |= uint64_t(rem[i]) << (32 * (i % 2));
     }
-
     r.trim();
     return r;
   }
