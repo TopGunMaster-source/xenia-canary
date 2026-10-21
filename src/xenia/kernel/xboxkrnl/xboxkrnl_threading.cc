@@ -1667,8 +1667,21 @@ static void RunDpcInline(uint32_t dpc_address, uint32_t arg1, uint32_t arg2) {
   }
 }
 
+// xboxkrnl_misc.cc: DPCs while the 360's backward compatibility runs.
+int QueueBackcompatDpc(uint32_t dpc, uint32_t arg1, uint32_t arg2);
+int RemoveBackcompatDpc(uint32_t dpc);
+
 dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
                                       dword_t arg2) {
+  int backcompat =
+      QueueBackcompatDpc(dpc.guest_address(), uint32_t(arg1), uint32_t(arg2));
+  if (backcompat >= 0) {
+    if (backcompat) {
+      dpc->arg1 = (uint32_t)arg1;
+      dpc->arg2 = (uint32_t)arg2;
+    }
+    return backcompat;
+  }
   uint32_t list_entry_ptr = dpc.guest_address() + 4;
 
   // Lock dispatcher.
@@ -1718,6 +1731,10 @@ dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
 DECLARE_XBOXKRNL_EXPORT2(KeInsertQueueDpc, kThreading, kImplemented, kSketchy);
 
 dword_result_t KeRemoveQueueDpc_entry(pointer_t<XDPC> dpc) {
+  int backcompat = RemoveBackcompatDpc(dpc.guest_address());
+  if (backcompat >= 0) {
+    return backcompat;
+  }
   bool result = false;
 
   uint32_t list_entry_ptr = dpc.guest_address() + 4;

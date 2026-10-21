@@ -303,6 +303,7 @@ static uint32_t UserToKernelAddress(uint32_t user_address) {
 }
 
 dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
+  g_dpcs_on_timer_thread = true;
   g_user_page_table = uint32_t(ctx->r[4]);
   LogBackcompatCall("KeCreateUserMode", ctx);
   DumpGuest("r4", uint32_t(ctx->r[4]), 0x1000);
@@ -403,6 +404,9 @@ static uint8_t* g_alias_base = nullptr;
 static cpu::Module* g_user_module = nullptr;
 static uint32_t g_alias_entries[0x100] = {};
 static thread_local UserModeState* t_user_mode = nullptr;
+// Whether KeInsertQueueDpc hands DPCs to the timer thread (see
+// QueueBackcompatDpc).
+static std::atomic<bool> g_dpcs_on_timer_thread{false};
 
 // Where xefu's user-mode thread is, by source line, for diagnosing hangs
 // (written to a file by the heartbeat, which doesn't need the log).
@@ -1683,6 +1687,12 @@ static std::mutex g_kernel_timer_mutex;
 static std::condition_variable g_kernel_timer_cv;
 static std::vector<PendingKernelTimer> g_kernel_timers;
 static object_ref<XHostThread> g_kernel_timer_thread;
+// DPCs queued with KeInsertQueueDpc while xefu runs, run one at a time on the
+// timer thread (see QueueBackcompatDpc).
+struct QueuedDpc {
+  uint32_t dpc, arg1, arg2;
+};
+static std::vector<QueuedDpc> g_queued_dpcs;
 
 // The pending kernel timers, for the heartbeat (which mustn't block on them).
 static std::string DescribeKernelTimers() {
@@ -1719,9 +1729,15 @@ static int KernelTimerThreadMain() {
   auto memory = kernel_memory();
   while (true) {
     PendingKernelTimer fired;
+    QueuedDpc queued = {};
     {
       std::unique_lock<std::mutex> lock(g_kernel_timer_mutex);
       while (true) {
+        if (!g_queued_dpcs.empty()) {
+          queued = g_queued_dpcs.front();
+          g_queued_dpcs.erase(g_queued_dpcs.begin());
+          break;
+        }
         auto now = std::chrono::steady_clock::now();
         auto next = g_kernel_timers.end();
         for (auto it = g_kernel_timers.begin(); it != g_kernel_timers.end();
@@ -1750,12 +1766,21 @@ static int KernelTimerThreadMain() {
         break;
       }
     }
-    auto timer = memory->TranslateVirtual<X_KTIMER*>(fired.timer);
-    timer->header.signal_state = 1;
-    if (!fired.dpc) {
-      continue;
+    uint32_t dpc_address;
+    uint32_t dpc_arg1 = 0, dpc_arg2 = 0;
+    if (queued.dpc) {
+      dpc_address = queued.dpc;
+      dpc_arg1 = queued.arg1;
+      dpc_arg2 = queued.arg2;
+    } else {
+      auto timer = memory->TranslateVirtual<X_KTIMER*>(fired.timer);
+      timer->header.signal_state = 1;
+      if (!fired.dpc) {
+        continue;
+      }
+      dpc_address = fired.dpc;
     }
-    auto dpc = memory->TranslateVirtual<XDPC*>(fired.dpc);
+    auto dpc = memory->TranslateVirtual<XDPC*>(dpc_address);
     uint32_t routine = dpc->routine;
     if (!routine) {
       continue;
@@ -1767,7 +1792,7 @@ static int KernelTimerThreadMain() {
     auto ppc_context = thread_state->context();
     DPCImpersonationScope dpc_scope{};
     kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
-    uint64_t args[] = {fired.dpc, uint32_t(dpc->context), 0, 0};
+    uint64_t args[] = {dpc_address, uint32_t(dpc->context), dpc_arg1, dpc_arg2};
     uint32_t stack_depth =
         kernel_state()->processor()->backend()->GetGuestStackDepth(ppc_context);
     kernel_state()->processor()->Execute(thread_state, routine, args,
@@ -1775,6 +1800,56 @@ static int KernelTimerThreadMain() {
     CheckStackpointsAfterCall(ppc_context, stack_depth, "a timer DPC");
     kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
     PropagateUserInterruptFlag();
+  }
+  return 0;
+}
+
+// With g_kernel_timer_mutex held.
+static void EnsureKernelTimerThread() {
+  if (!g_kernel_timer_thread) {
+    g_kernel_timer_thread = object_ref<XHostThread>(
+        new XHostThread(kernel_state(), 128 * 1024, 0, KernelTimerThreadMain,
+                        kernel_state()->GetSystemProcess()));
+    g_kernel_timer_thread->set_name("Kernel Timer DPCs");
+    g_kernel_timer_thread->Create();
+  }
+}
+
+// While xefu runs, KeInsertQueueDpc queues DPCs for the timer thread, which
+// runs them, and the timers' DPCs, one at a time, as one processor would.
+// Run inline on the queuing thread, xefu's DPCs ran concurrently with each
+// other (two threads in its interrupt controller emulation deadlocked) and
+// while the queuing thread held its spinlocks. Returns -1 when not handled
+// here, else KeInsertQueueDpc's result.
+int QueueBackcompatDpc(uint32_t dpc, uint32_t arg1, uint32_t arg2) {
+  if (!g_dpcs_on_timer_thread) {
+    return -1;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_kernel_timer_mutex);
+    for (const QueuedDpc& queued : g_queued_dpcs) {
+      if (queued.dpc == dpc) {
+        return 0;  // already queued
+      }
+    }
+    g_queued_dpcs.push_back({dpc, arg1, arg2});
+    EnsureKernelTimerThread();
+  }
+  g_kernel_timer_cv.notify_all();
+  return 1;
+}
+
+// KeRemoveQueueDpc for those: -1 when not handled here.
+int RemoveBackcompatDpc(uint32_t dpc) {
+  if (!g_dpcs_on_timer_thread) {
+    return -1;
+  }
+  std::lock_guard<std::mutex> lock(g_kernel_timer_mutex);
+  for (auto it = g_queued_dpcs.begin(); it != g_queued_dpcs.end(); ++it) {
+    if (it->dpc == dpc) {
+      g_queued_dpcs.erase(it);
+      return 1;
+    }
   }
   return 0;
 }
@@ -1830,13 +1905,7 @@ dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
     was_set = RemoveKernelTimer(timer);
     g_kernel_timers.push_back(
         {timer, dpc, due, std::chrono::milliseconds(std::max(period, 0))});
-    if (!g_kernel_timer_thread) {
-      g_kernel_timer_thread = object_ref<XHostThread>(
-          new XHostThread(kernel_state(), 128 * 1024, 0, KernelTimerThreadMain,
-                          kernel_state()->GetSystemProcess()));
-      g_kernel_timer_thread->set_name("Kernel Timer DPCs");
-      g_kernel_timer_thread->Create();
-    }
+    EnsureKernelTimerThread();
   }
   g_kernel_timer_cv.notify_all();
   return was_set ? 1 : 0;
