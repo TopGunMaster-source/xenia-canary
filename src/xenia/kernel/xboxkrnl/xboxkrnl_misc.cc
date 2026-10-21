@@ -1205,6 +1205,16 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
             XELOGI("BACKCOMPAT   wrote the Xbox's RAM to {}",
                    xe::path_to_utf8(path));
           }
+          // And xefu's user-mode runtime and translated code (16 MB pages
+          // B8 and B9: physical 0x08000000 and 0x09000000).
+          auto code_path =
+              kernel_state()->emulator()->storage_root() / "xefu_user_code.bin";
+          if (FILE* file = xe::filesystem::OpenFile(code_path, "wb")) {
+            fwrite(
+                kernel_memory()->TranslatePhysical<const uint8_t*>(0x08000000u),
+                1, 0x02000000, file);
+            fclose(file);
+          }
         }
         for (uint32_t line = 0; line < 8; ++line) {
           std::string bytes;
