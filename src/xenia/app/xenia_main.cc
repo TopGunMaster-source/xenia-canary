@@ -115,6 +115,10 @@ DEFINE_bool(mount_compatibility, true,
             "emulator (xefu).",
             "Storage");
 UPDATE_from_bool(mount_cache, 2024, 8, 31, 20, false);
+DEFINE_path(compatibility_root, "",
+            "Host folder mounted as the hard drive's Compatibility folder, or "
+            "empty for <storage root>\\compatibility.",
+            "Storage");
 
 DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
             "Storage");
@@ -676,7 +680,10 @@ void EmulatorApp::EmulatorThread() {
     // NOTE: registered here, before any \Device\Harddisk0\Partition1 device a
     // launch mounts, so that VirtualFileSystem::ResolvePath (first matching
     // prefix wins) sends Compatibility paths here and everything else on.
-    const auto compat_path = emulator_->storage_root() / "compatibility";
+    const std::filesystem::path compat_path =
+        cvars::compatibility_root.empty()
+            ? emulator_->storage_root() / "compatibility"
+            : std::filesystem::path(cvars::compatibility_root);
     for (const char* mount :
          {"\\Device\\Harddisk0\\Partition1\\Compatibility",
           "\\Device\\Harddisk0\\SystemPartition\\Compatibility"}) {
