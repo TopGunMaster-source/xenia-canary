@@ -1,0 +1,150 @@
+# Issues and Fixes
+
+Every problem hit so far, in the order it was found. Each entry gives what we saw, what Xenia was doing wrong, how it was fixed, and the commit(s) on [`xefu-backcompat`](https://github.com/TopGunMaster-source/xenia-canary/commits/xefu-backcompat).
+
+Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a test run · 🔧 workaround, not a full fix
+
+---
+
+## Stage 1: getting XeFu itself to start
+
+### 1. XeFu couldn't find its per-title table ✅
+* **Symptom:** `xefu7.xex` loaded, but its imports from `xefutitle7.xex` stayed unresolved.
+* **Cause:** XeFu imports the library by bare name. Xenia joined bare names to the *first* loaded module's path, which, while that first module was still loading, gave a path with no device.
+* **Fix:** resolve bare-named libraries beside the importing module, as the 360's loader does. `5a51f1d`
+
+### 2. No hard-drive Compatibility folder ✅
+* **Symptom:** XeFu looks for `config.bin`, `xbox.xex` and the emulated Xbox's hard drive in `\Device\Harddisk0\Partition1\Compatibility`.
+* **Fix:** mount `<storage root>\compatibility` there (cvar `mount_compatibility`); later a `compatibility_root` cvar to point at any folder. `8e08a4b`, `68869cc`
+
+### 3. The user-mode kernel functions didn't exist ✅
+* **Symptom:** XeFu calls `KeCreateUserMode`, `KeEnterUserMode`, `KeLeaveUserMode`, TB flushes and others that no 360 game uses.
+* **Fix:** research stubs that log their arguments (`8e08a4b`, `dd33aca`, `f55703c`), then a real emulated **user mode** (`3e0782c`). XeFu's x86 game code runs in a separate address space built from XeFu's page tables (an "alias space" of extra views of guest memory). System calls go to XeFu's handler with a trap frame.
+
+### 4. Crash on the first indirect call ✅
+* **Cause:** `lea eax, [ebx - 0x80000000]` needs a −2³¹ displacement, which the x86 assembler library refuses.
+* **Fix:** compute it with `mov`/`add`. `228f59a`
+
+### 5. Writing past the indirection table ✅
+* **Cause:** code at 0xB0000000+ (user mode) got indirection slots, but the table only covers 0x80000000–0x9FFFFFFF.
+* **Fix:** don't write slots for code outside the table; resolve those calls the slow way. `82f86ff`, `3e0782c`
+
+### 6. Page faults in user mode weren't delivered ✅
+* **Symptom:** the first user-mode fault (the x86 stack, not mapped yet) stopped the emulator.
+* **Fix:** deliver host access violations in the alias space to XeFu's handler as exception records. Run that handler ahead of Xenia's crash handler. Translate user code without context promotion, so registers are exact at any instruction. `a064d3c`, `ae93ade`
+
+### 7. Overflow flags missing ✅
+* **Cause:** XeFu translates x86 arithmetic with the PowerPC `o` forms (`addo`, `subfo`, `mullwo` …) to get the x86 overflow flag; Xenia didn't set XER[OV]/[SO].
+* **Fix:** implement OV/SO for those instructions, including `mullwo`. `ae93ade`, `a96869e`
+
+### 8. Endless loop after a system call ✅
+* **Cause:** the trap frame's IAR pointed at the `sc` itself. On the 360, SRR0 is the *next* instruction.
+* **Fix:** store the next instruction. `c5454a3`
+
+### 9. Stale translations of rewritten code ✅
+* **Cause:** XeFu writes new translated code and calls `KeSweepIcacheRange`; Xenia kept running its old translation.
+* **Fix:** drop Xenia's translations of user code in the swept range. `3a09161`
+
+### 10. Stackpoints overflowing from XeFu's block chaining ✅
+* **Cause:** XeFu's translated blocks `bl` into its dispatcher and never return, so each block left a host frame behind.
+* **Fix:** in user-mode code every branch-with-link is a jump. `6ab12db`
+
+### 11. Memory pages XeFu maps weren't visible ✅
+* **Cause:** XeFu maps the Xbox's RAM in 64 KB pages and its page tables in 4 KB pages through second-level tables; Xenia only mapped 16 MB segments.
+* **Fix:** decode XeFu's page-table structure. Map 64 KB pages as views, and 4 KB pages as 64 KB views where they line up. Emulate the load or store on a fault where they don't. `f39b110`, `5f4b8bb`, `ac5d596`
+
+---
+
+## Stage 2: the emulated Xbox boots
+
+### 12. The Xbox clock never ticked ✅
+* **Symptom:** the Xbox kernel spun at x86 `80019470` waiting for time to pass.
+* **Cause:** `KeSetTimerEx` was a stub, so XeFu's timer DPC (which drives the Xbox's timer interrupt) never ran.
+* **Fix:** real kernel timers with DPCs on a host thread (`e7b4a58`). They expire on 1 ms clock ticks, not immediately (`3bf05a7`). Firing at once ran the Xbox clock about 1000× too fast.
+
+### 13. Interrupts were never taken ✅
+* **Symptom:** the Xbox kernel sat in `KfLowerIrql` with an IRQ pending.
+* **Causes:**
+  * XeFu reports its trap instructions as illegal-instruction records; Xenia ignored traps. `6e04013`
+  * XeFu raises an interrupt by setting CR bit 4 in the user thread's trap frame (found through KTHREAD+0x128), and Xenia had no trap frame there. `a59d20f`
+* **Fix:** route traps to XeFu's handler; point KTHREAD+0x128 at the user trap frame and carry the bit into the live registers.
+
+### 14. EEPROM check failed (front LED 0xA0) ✅
+* **Symptom:** the Xbox kernel's phase 1 rejected the EEPROM and stopped.
+* **Cause:** two crypto bugs. `XeCryptRc4Key` always cycled 16 key bytes (XeFu uses a 20-byte key), and `XeCryptHmacShaInit` padded the key wrongly.
+* **Fix:** both corrected. `5b4c9a5`
+
+### 15. Xbox kernel data at 0xFE000000 kept faulting ✅
+* **Cause:** Xenia's JIT adds 4 KB to host addresses at or above 0xE0000000 (a 360 physical-heap quirk) when the host granularity is 64 KB, which the alias views can't follow, so those pages stayed unmapped.
+* **Fix:** translate user-mode code without the offset and map those pages normally. `09b9cc6`
+
+### 16. "Overflowed stackpoints" after a few hundred DPCs ✅
+* **Cause:** Xenia ran `KeInsertQueueDpc` inline. XeFu's interrupt DPC queues itself again, which recursed without bound.
+* **Fix:** DPCs queued from a DPC run after it, never nested (`e3e7ce6`); a safety net restores the stackpoint depth (`dee45f6`).
+
+### 17. The Xbox clock stopped again (deadlock) ✅
+* **Cause:** two of XeFu's DPCs ran at once (its interrupt thread and the clock timer) and deadlocked in its interrupt-controller emulation. On a real CPU, DPCs never run concurrently.
+* **Fix:** while XeFu runs, all its DPCs run one at a time on the timer thread. `d175f20`, `baa31dd` (the first push failed to compile; fixed by declaring the flag earlier)
+
+---
+
+## Stage 3: loading Burnout 3
+
+### 18. XeFu "exits" instead of starting the game ✅ (understood)
+* **Symptom:** XeFu called `XamLoaderLaunchTitleEx("X:\xbox.xex")`. At first this looked like a game launch; it is actually XeFu leaving to the 360's backward-compatibility launcher after the Xbox gave up.
+* **Fix:** implement `XamLoaderLaunchTitleEx` (relaunch Xenia like a real 360 does, cvar `relaunch_on_title_launch`), and log the x86 state when the Xbox kernel returns to the dashboard, so the real reason can be read. `124751b`, `89baabc`
+
+### 19. `\??\d:\default.xbe` rejected (0xC0000033) ✅
+* **Cause:** `\??\` (the DOS devices directory) contains `?`, which Xenia's path check rejects.
+* **Fix:** accept `\??\` paths in `NtCreateFile` and friends; link `X:` to the Compatibility folder. `4e7b982`
+
+### 20. Crash writing through a NULL pointer ✅
+* **Symptom:** crash at `820C1D70` while creating `Y:\Xbox1\TDATA\FFFE0000\MUSIC\st.db`.
+* **Cause:** XeFu's `WriteFile` wrapper stores the byte count even when the caller passed NULL. The 360 allows writes to page zero; Xenia protects it.
+* **Fix:** unprotect page zero while XeFu runs. `499c90c`
+
+### 21. The game file landed nowhere (0xC000007B, invalid image) ✅
+* **Cause:** XeFu copies file data into the Xbox's scattered RAM pages through `MmLockAndMapSegmentArray`, which was a stub returning 0.
+* **Fix:** implement it with a bounce buffer that is copied back on unmap. `499c90c`
+
+### 22. Signature check failed (0xC0000190, trust failure) ✅
+* **Cause:** Xenia's big-number remainder (used by `XeCryptBnQwNeRsaPubCrypt`) overflowed its quotient estimate, so RSA gave wrong answers for some inputs. Verified offline: Xenia's result was wrong, the correct math matched Burnout 3's real signature.
+* **Fix:** rewrite the remainder (Knuth's algorithm D on 32-bit digits), checked against 3000 random cases. `05679f7`
+
+### 23. "Media not allowed" (0xC0050002) ✅
+* **Cause:** XeFu asks drive `D:` with IOCTL `0x24080` whether an Xbox DVD is present. Xenia didn't answer, so the media type was 0, which the game's certificate doesn't allow.
+* **Fix:** answer the IOCTL with success. `b104a8c`
+
+### 24. A memory-clearing loop that never ended ✅
+* **Cause:** the game's memset uses `dcbz` on a 4 KB page Xenia couldn't map. The fault emulation only knew integer loads and stores, so the fault went back to XeFu, which saw the page mapped and retried forever.
+* **Fix:** emulate `dcbz`, floating-point and vector loads and stores too. `592dd0b`
+
+### 25. Most game memory went the slow way (performance) ✅
+* **Cause:** Windows documents file views as 64 KB-granular, so scattered 4 KB pages couldn't be mapped, and every access faulted and was emulated.
+* **Fixes:**
+  * Use Windows *placeholders*, which on current Windows accept 4 KB views at 4 KB offsets. Xenia checks this at startup and falls back if not. Confirmed: `Alias address space is page granular`. `27f372d`
+  * When XeFu has already mapped a page (it doesn't flush the TB for new mappings), map it and retry instead of emulating. `01563c6`
+
+### 26. A game section only half loaded (0xC0000190 again) 🧪
+* **Symptom:** sections `.text`, `XMV`, `DSOUND`, `WMADEC` passed their SHA-1 check; `XONLINE` failed. Comparing RAM with the XBE showed exactly the first 64 KB copied and the rest zero.
+* **Cause:** XeFu's copy routine (hypercall `060E`) stops early when CR bit 4 says an interrupt is pending, expecting to resume after the interrupt. If no interrupt is actually deliverable, XeFu's dispatcher continues past the copy. Xenia set that bit from another thread, so the bit could outlive the interrupt and the copy was silently cut short.
+* **Fix:** set the bit only while an interrupt is pending *and* enabled, and take it back if that changed meanwhile. `40af7de`. Built, not yet tested.
+
+---
+
+## Problems with the test setup itself
+
+### 27. Old Xenia processes locked the exe 🔧
+* Frozen test runs kept `xenia_canary.exe` locked. Workaround: every build runs from its own folder (`run2`, `run3`, …).
+
+### 28. Auto-relaunch overwrote the log ✅
+* The relaunched process wrote over the first process's log. Diagnosis runs set `relaunch_on_title_launch = false`.
+
+### 29. Test runs filled the disk (~90 GB) ✅
+* **Symptom:** downloads of new builds came out as 0-byte files.
+* **Cause:** test processes that had finished (XeFu exited) stayed open, kept logging at debug level for hours, and reached up to 31 GB per run.
+* **Fix:** the logs were cleared; the log file now stops at 2 GB (`log_file_max_mb`), and with relaunch off Xenia exits when the test ends. `6bf7a85`
+
+### 30. Silent crash while checking the game's code section 🔍 investigating
+* **Symptom:** with build `6bf7a85`, Xenia closes by itself about 4 seconds in, while the Xbox kernel is hashing `.text` (the first section). No error message and no crash line in the log. It happened twice in a row. The previous build got through `.text` fine.
+* **Next step:** Xenia now writes a crash dump (`xenia_crash.dmp` beside the exe) on an unhandled exception (`a46c86f`), so the next run should show where it crashes.
