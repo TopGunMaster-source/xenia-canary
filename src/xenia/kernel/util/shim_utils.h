@@ -10,6 +10,7 @@
 #ifndef XENIA_KERNEL_UTIL_SHIM_UTILS_H_
 #define XENIA_KERNEL_UTIL_SHIM_UTILS_H_
 
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <type_traits>
@@ -382,6 +383,23 @@ inline Memory* kernel_memory() { return kernel_state()->memory(); }
 
 namespace shim {
 
+// The last kernel export a traced thread (xefu's user-mode thread) called,
+// and whether it returned, for diagnosing hangs without the log.
+extern thread_local bool t_trace_exports;
+extern std::atomic<cpu::Export*> g_traced_export;
+extern std::atomic<uint32_t> g_traced_export_returned;
+inline void TraceExportCall(cpu::Export* export_entry) {
+  if (t_trace_exports) {
+    g_traced_export_returned.store(0, std::memory_order_relaxed);
+    g_traced_export.store(export_entry, std::memory_order_relaxed);
+  }
+}
+inline void TraceExportReturn() {
+  if (t_trace_exports) {
+    g_traced_export_returned.store(1, std::memory_order_relaxed);
+  }
+}
+
 inline void AppendParam(StringBuffer* string_buffer, int_t param) {
   string_buffer->AppendFormat("{}", int32_t(param));
 }
@@ -553,6 +571,7 @@ struct ExportRegistrerHelper {
         // The make_tuple order is undefined per the C++ standard and
         // cause inconsitencies between msvc and clang.
         std::tuple<Ps...> params = {Ps(init)...};
+        TraceExportCall(export_entry);
         if (TAGS & xe::cpu::ExportTag::kLog &&
             (!(TAGS & xe::cpu::ExportTag::kHighFrequency) ||
              cvars::log_high_frequency_kernel_calls)) {
@@ -567,11 +586,13 @@ struct ExportRegistrerHelper {
         if constexpr (std::is_void<R>::value) {
           KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                            std::make_index_sequence<sizeof...(Ps)>());
+          TraceExportReturn();
         } else {
           auto result =
               KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                                std::make_index_sequence<sizeof...(Ps)>());
           result.Store(ppc_context);
+          TraceExportReturn();
           if (TAGS &
               (xe::cpu::ExportTag::kLog | xe::cpu::ExportTag::kLogResult)) {
             // TODO(benvanik): log result.
@@ -586,14 +607,17 @@ struct ExportRegistrerHelper {
             0,
         };
         std::tuple<Ps...> params = {Ps(init)...};
+        TraceExportCall(export_entry);
         if constexpr (std::is_void<R>::value) {
           KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                            std::make_index_sequence<sizeof...(Ps)>());
+          TraceExportReturn();
         } else {
           auto result =
               KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                                std::make_index_sequence<sizeof...(Ps)>());
           result.Store(ppc_context);
+          TraceExportReturn();
         }
       }
     };

@@ -403,6 +403,11 @@ static uint8_t* g_alias_base = nullptr;
 static cpu::Module* g_user_module = nullptr;
 static uint32_t g_alias_entries[0x100] = {};
 static thread_local UserModeState* t_user_mode = nullptr;
+
+// Where xefu's user-mode thread is, by source line, for diagnosing hangs
+// (written to a file by the heartbeat, which doesn't need the log).
+static std::atomic<uint32_t> g_phase{0};
+#define XEFU_PHASE() g_phase.store(__LINE__, std::memory_order_relaxed)
 static std::atomic<uint32_t> g_syscall_logs{0};
 
 static void SetCrFromValue(cpu::ppc::PPCContext* pc, uint32_t cr) {
@@ -461,6 +466,7 @@ static uint32_t PageMappingFromEntry(uint32_t entry, uint32_t physical) {
 
 // Brings the alias space in line with xefu's page table.
 static bool SyncUserSpace() {
+  XEFU_PHASE();
   auto memory = kernel_memory();
   if (!g_alias_base) {
     g_alias_base = memory->CreateAliasSpace();
@@ -656,6 +662,7 @@ static void PropagateUserInterruptFlag() {
 
 static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
                                    uint32_t record, uint32_t iar) {
+  XEFU_PHASE();
   PropagateUserInterruptFlag();
   std::memcpy(&st->user_regs, pc, sizeof(*pc));
   WriteFrame(st, iar);
@@ -666,8 +673,10 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
   uint64_t args[] = {record, st->frame};
   auto thread = XThread::GetCurrentThread();
+  XEFU_PHASE();
   kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
                                        args, xe::countof(args));
+  XEFU_PHASE();
 
   // Back to user mode with whatever the handler left in the frame.
   std::memcpy(pc, &st->user_regs, sizeof(*pc));
@@ -689,6 +698,7 @@ static SyscallRecord g_syscall_ring[kSyscallRingSize];
 static std::atomic<uint32_t> g_syscall_ring_index{0};
 
 static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
+  XEFU_PHASE();
   UserModeState* st = t_user_mode;
   if (!st || pc->virtual_membase != g_alias_base) {
     return false;
@@ -725,6 +735,7 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   // Like SRR0 for a system call, the frame's IAR is the instruction after
   // the sc; xefu leaves it there to return normally.
   uint32_t iar = RunUserModeHandler(st, pc, 0, sc_address + 4);
+  XEFU_PHASE();
   rec.r3_after = uint32_t(pc->r[3]);
   rec.r11_after = uint32_t(pc->r[11]);
   pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
@@ -1061,6 +1072,7 @@ static std::atomic<uint32_t> g_fault_logs{0};
 // resume.
 [[maybe_unused]] static uint32_t DeliverUserModeFault(
     UserModeState* st, cpu::ppc::PPCContext* pc) {
+  XEFU_PHASE();
   const UserModeFault& fault = st->fault;
   if (g_fault_logs.fetch_add(1) < 200) {
     XELOGI("BACKCOMPAT fault at {:08X}: {} {:08X}", fault.iar,
@@ -1135,6 +1147,7 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
   if (!st || !g_alias_base) {
     return false;
   }
+  XEFU_PHASE();
   if (ex->code() != Exception::Code::kAccessViolation) {
     LogUnhandledUserModeException(ex, "not an access violation");
     return false;
@@ -1192,10 +1205,27 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
   if (started.exchange(true)) {
     return;
   }
-  std::thread([] {
+  auto status_path =
+      kernel_state()->emulator()->storage_root() / "xefu_heartbeat.txt";
+  std::thread([status_path] {
     for (uint32_t tick = 0; tick < 2000; ++tick) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
       auto pc = g_heartbeat_context.load();
+      // First, without the log (which a hang may be holding): where the
+      // user-mode thread is, and the last kernel export it called.
+      if (FILE* file = xe::filesystem::OpenFile(status_path, "a")) {
+        cpu::Export* last_export = shim::g_traced_export.load();
+        std::string line = fmt::format(
+            "tick {} phase line {} last export {} ({}) EIP {:08X}, {} system "
+            "calls, {} faults, {} timer DPCs, {} interrupts raised\n",
+            tick, g_phase.load(), last_export ? last_export->name : "none",
+            shim::g_traced_export_returned.load() ? "returned" : "in it",
+            pc ? uint32_t(pc->r[2]) : 0, g_syscall_logs.load(),
+            g_fault_logs.load(), g_timer_dpc_count.load(),
+            g_interrupt_flags.load());
+        fputs(line.c_str(), file);
+        fclose(file);
+      }
       if (!pc) {
         continue;
       }
@@ -1385,6 +1415,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   state->next_iar = iar;
   state->guest_stack_depth = backend->GetGuestStackDepth(pc);
   t_user_mode = state;
+  shim::t_trace_exports = true;
   StartUserModeHeartbeat(pc);
   // The trap frame xefu raises interrupts in (see PropagateUserInterruptFlag).
   auto kthread = thread->guest_object<X_KTHREAD>();
@@ -1413,6 +1444,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
         state->next_iar = DeliverUserModeFault(state, pc);
       }
     }
+    XEFU_PHASE();
     processor->ExecuteRaw(thread_state, state->next_iar);
     XELOGW("BACKCOMPAT user mode code returned to the kernel");
   } catch (const UserModeExit& exit) {
