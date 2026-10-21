@@ -215,3 +215,25 @@ loaded at 0x80010000) on its x86-to-PowerPC translator.
   front LED to 0xA0 and terminates its thread, which leaves the kernel in
   the idle loop. Xenia's `XeCryptRc4Key` used to ignore the key length (it
   always cycled 16 bytes), which broke this.
+* **DPCs.** xefu's DPCs re-queue themselves and must not nest or run
+  concurrently (its interrupt DPC and clock DPC deadlock otherwise). While
+  xefu runs, `KeInsertQueueDpc` queues them for the kernel timer thread,
+  which runs them one at a time.
+* **Loading the game.** The Xbox kernel asks for
+  `\Device\CdRom0\default.xbe` (hypercall 0202); xefu's I/O thread opens
+  `\??\d:\default.xbe`. Xenia used to reject `\??\` paths (C0000033), which
+  made the Xbox kernel's loader fail and return to the dashboard (`sc 0x10`
+  at EIP 80024627, hypercall 0702), and xefu then exits to `X:\xbox.xex`.
+* **Copying file data into Xbox RAM.** xefu reads into its own buffer, then
+  maps the Xbox RAM pages (a segment array of page addresses) with
+  `MmLockAndMapSegmentArray`, copies, and unmaps with
+  `MmUnlockAndUnmapSegmentArray`. Xenia emulates the mapping with a bounce
+  buffer copied back on unmap.
+* **Page zero.** xefu's WriteFile wrapper (820C1D70) stores the byte count
+  even when the caller passes NULL (creating
+  `Y:\Xbox1\TDATA\FFFE0000\MUSIC\st.db`), so page zero must be writable;
+  `KeCreateUserMode` unprotects it.
+* **Exit.** xefu leaves through `XamLoaderSetLaunchData` +
+  `XamLoaderLaunchTitleEx("X:\xbox.xex")` (the backward-compatibility
+  launcher). With `relaunch_on_title_launch` Xenia restarts itself with the
+  same disc, which is what the 360 does; turn it off when reading logs.
