@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "xenia/base/exception_handler.h"
@@ -1102,6 +1103,34 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
 }
 #endif  // XE_USER_MODE_FAULTS
 
+// Research: a log line every few seconds while user mode runs, so a quiet
+// stretch shows whether the game is progressing (the x86 EIP is in r2) or
+// stuck.
+static std::atomic<uint32_t> g_sweep_count{0};
+static std::atomic<cpu::ppc::PPCContext*> g_heartbeat_context{nullptr};
+
+static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
+  static std::atomic<bool> started{false};
+  g_heartbeat_context = pc;
+  if (started.exchange(true)) {
+    return;
+  }
+  std::thread([] {
+    for (uint32_t tick = 0; tick < 2000; ++tick) {
+      std::this_thread::sleep_for(std::chrono::seconds(3));
+      auto pc = g_heartbeat_context.load();
+      if (!pc) {
+        continue;
+      }
+      XELOGI(
+          "BACKCOMPAT heartbeat: x86 EIP {:08X} ESP {:08X}, {} system calls, "
+          "{} faults, {} code sweeps",
+          uint32_t(pc->r[2]) & 0x7FFFFFFFu, uint32_t(pc->r[7]) & 0x7FFFFFFFu,
+          g_syscall_logs.load(), g_fault_logs.load(), g_sweep_count.load());
+    }
+  }).detach();
+}
+
 dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   // r3: CONTEXT with the starting state, r4: xefu's handler.
   LogBackcompatCall("KeEnterUserMode", ctx);
@@ -1154,6 +1183,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   state->next_iar = iar;
   state->guest_stack_depth = backend->GetGuestStackDepth(pc);
   t_user_mode = state;
+  StartUserModeHeartbeat(pc);
   uint32_t status = X_STATUS_SUCCESS;
   try {
     // Only memory (state) is reliable after a restart: locals changed past
@@ -1305,6 +1335,7 @@ dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
   // view of physical memory): Xenia's translations of that code are stale.
   static std::atomic<uint32_t> sweeps{0};
   uint32_t n = sweeps.fetch_add(1);
+  g_sweep_count = n + 1;
   if (n < 50) {
     LogBackcompatCall("KeSweepIcacheRange", ctx);
   }
