@@ -198,8 +198,7 @@ RegExp ComputeMemoryAddress(X64Emitter& e, const T& guest) {
     if (address < 0x80000000) {
       return e.GetMembaseReg() + address;
     } else {
-      if (address >= 0xE0000000 &&
-          e.emulate_e0_offset()) {
+      if (address >= 0xE0000000 && e.emulate_e0_offset()) {
         e.mov(e.eax, address + 0x1000);
       } else {
         e.mov(e.eax, address);
@@ -207,8 +206,7 @@ RegExp ComputeMemoryAddress(X64Emitter& e, const T& guest) {
       return e.GetMembaseReg() + e.rax;
     }
   } else {
-    if (e.emulate_e0_offset() &&
-        !is_definitely_not_eo(guest)) {
+    if (e.emulate_e0_offset() && !is_definitely_not_eo(guest)) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
       Xbyak::Label& jmpback = e.NewCachedLabel();
@@ -250,8 +248,7 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
     if (address < 0x80000000) {
       return e.GetMembaseReg() + address;
     } else {
-      if (address >= 0xE0000000 &&
-          e.emulate_e0_offset()) {
+      if (address >= 0xE0000000 && e.emulate_e0_offset()) {
         e.mov(e.eax, address + 0x1000);
       } else {
         e.mov(e.eax, address);
@@ -259,8 +256,7 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
       return e.GetMembaseReg() + e.rax;
     }
   } else {
-    if (e.emulate_e0_offset() &&
-        !is_definitely_not_eo(guest)) {
+    if (e.emulate_e0_offset() && !is_definitely_not_eo(guest)) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
 
@@ -1936,8 +1932,7 @@ struct CACHE_CONTROL
       if (address_constant < 0x80000000) {
         addr = e.GetMembaseReg() + address_constant;
       } else {
-        if (address_constant >= 0xE0000000 &&
-            e.emulate_e0_offset()) {
+        if (address_constant >= 0xE0000000 && e.emulate_e0_offset()) {
           e.mov(e.eax, address_constant + 0x1000);
         } else {
           e.mov(e.eax, address_constant);
