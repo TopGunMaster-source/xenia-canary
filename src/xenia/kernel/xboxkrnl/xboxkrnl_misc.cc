@@ -54,6 +54,10 @@ namespace xe {
 namespace kernel {
 namespace xboxkrnl {
 
+// Whether KeInsertQueueDpc hands DPCs to the timer thread (see
+// QueueBackcompatDpc).
+static std::atomic<bool> g_dpcs_on_timer_thread{false};
+
 enum class XMicRequestType : uint16_t {
   MicGetStatus = 0x0000,
   MicStart = 0x0001,
@@ -404,9 +408,6 @@ static uint8_t* g_alias_base = nullptr;
 static cpu::Module* g_user_module = nullptr;
 static uint32_t g_alias_entries[0x100] = {};
 static thread_local UserModeState* t_user_mode = nullptr;
-// Whether KeInsertQueueDpc hands DPCs to the timer thread (see
-// QueueBackcompatDpc).
-static std::atomic<bool> g_dpcs_on_timer_thread{false};
 
 // Where xefu's user-mode thread is, by source line, for diagnosing hangs
 // (written to a file by the heartbeat, which doesn't need the log).
