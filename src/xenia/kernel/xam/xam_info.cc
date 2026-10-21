@@ -10,6 +10,7 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/string_util.h"
 #include "xenia/config.h"
 #include "xenia/kernel/kernel_state.h"
@@ -34,6 +35,16 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/fmt/include/fmt/xchar.h"
+
+#if XE_PLATFORM_WIN32
+#include "xenia/base/platform_win.h"
+#endif
+
+DEFINE_bool(relaunch_on_title_launch, true,
+            "When a title launches another title (or itself with new launch "
+            "data), restart Xenia automatically to run it, instead of asking "
+            "to restart by hand.",
+            "Kernel");
 
 DEFINE_int32(avpack, 8,
              "Video modes\n"
@@ -528,6 +539,60 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   kernel_state()->TerminateTitle();
 }
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitle, kNone, kSketchy);
+
+// Starts a new emulator process, which runs the saved loader data's title.
+static bool RelaunchEmulator() {
+#if XE_PLATFORM_WIN32
+  wchar_t exe_path[MAX_PATH];
+  if (!GetModuleFileNameW(nullptr, exe_path, MAX_PATH)) {
+    return false;
+  }
+  std::wstring command_line = std::wstring(L"\"") + exe_path + L"\"";
+  STARTUPINFOW startup_info = {};
+  startup_info.cb = sizeof(startup_info);
+  PROCESS_INFORMATION process_info = {};
+  if (!CreateProcessW(exe_path, command_line.data(), nullptr, nullptr, FALSE, 0,
+                      nullptr, nullptr, &startup_info, &process_info)) {
+    return false;
+  }
+  CloseHandle(process_info.hThread);
+  CloseHandle(process_info.hProcess);
+  return true;
+#else
+  return false;
+#endif
+}
+
+// XamLoaderLaunchTitleEx(launch path, mount path, command line, flags). The
+// 360's backward compatibility (xefu) launches itself with new launch data
+// this way to start an original Xbox title.
+void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
+                                  lpstring_t command_line, dword_t flags) {
+  auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
+  auto& loader_data = xam->loader_data();
+  XELOGI("XamLoaderLaunchTitleEx({}, {}, {}, {:08X}), {} bytes of launch data",
+         launch_path ? launch_path.value() : "(null)",
+         mount_path ? mount_path.value() : "(null)",
+         command_line ? command_line.value() : "(null)", uint32_t(flags),
+         loader_data.launch_data.size());
+  if (!launch_path || launch_path.value().empty() ||
+      !cvars::relaunch_on_title_launch) {
+    XamLoaderLaunchTitle_entry(launch_path, flags);
+    return;
+  }
+  loader_data.launch_flags = flags;
+  loader_data.launch_path = xe::path_to_utf8(launch_path.value());
+  xam->SaveLoaderData();
+  config::SaveConfig();
+  if (RelaunchEmulator()) {
+    XELOGI("Restarting the emulator to launch {}", loader_data.launch_path);
+    xe::FlushLog();
+    std::quick_exit(0);
+  }
+  XELOGE("Couldn't restart the emulator; asking to restart it by hand");
+  XamLoaderLaunchTitle_entry(launch_path, flags);
+}
+DECLARE_XAM_EXPORT1(XamLoaderLaunchTitleEx, kNone, kSketchy);
 
 void XamLoaderTerminateTitle_entry() {
   std::string title = "Title terminated";
