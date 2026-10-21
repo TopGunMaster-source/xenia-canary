@@ -385,9 +385,12 @@ void XeCryptRc4Key_entry(pointer_t<XECRYPT_RC4_STATE> rc4_ctx, lpvoid_t key,
     rc4_ctx->S[x] = (uint8_t)x;
   }
 
+  // The key schedule cycles through the whole key, whatever its length (the
+  // original Xbox's EEPROM, for one, is encrypted with a 20-byte key).
+  const uint32_t key_length = key_size ? key_size.value() : 1;
   uint32_t idx = 0;
   for (uint32_t x = 0; x < 0x100; x++) {
-    idx = (idx + rc4_ctx->S[x] + key[x % 0x10]) % 0x100;
+    idx = (idx + rc4_ctx->S[x] + key[x % key_length]) % 0x100;
     uint8_t temp = rc4_ctx->S[idx];
     rc4_ctx->S[idx] = rc4_ctx->S[x];
     rc4_ctx->S[x] = temp;
@@ -505,24 +508,32 @@ void XeCryptHmacShaInit_entry(pointer_t<XECRYPT_HMACSHA_STATE> sha_state_ptr,
   sha_state_ptr.Zero();
 
   const uint8_t* key_data_ptr = key_ptr.as<uint8_t*>();
-  const uint32_t key_size_ = key_size > 64 ? 64 : key_size.value();
 
   XeCryptShaInit_entry(sha_state_ptr->sha_state);
   XeCryptShaInit_entry(&sha_state_ptr->sha_state[1]);
 
-  std::array<uint8_t, 64> key_1 = {};
-  std::array<uint8_t, 64> key_2 = {};
-
-  std::copy_n(key_data_ptr, key_size_, key_1.begin());
-  std::copy_n(key_data_ptr, key_size_, key_2.begin());
-
-  for (uint8_t i = 0; i < key_size_; i += 1) {
-    key_1[i] ^= 0x5C5C5C5Cu;
-    key_2[i] ^= 0x36363636u;
+  // Standard HMAC: the key, hashed first if longer than a block, zero-padded
+  // to the 64-byte block and XORed with the pads.
+  std::array<uint8_t, 64> key_block = {};
+  if (key_size > 64) {
+    sha1::SHA1 sha_key;
+    sha_key.processBytes(key_data_ptr, key_size);
+    sha_key.finalize(key_block.data());
+  } else {
+    std::copy_n(key_data_ptr, key_size.value(), key_block.begin());
   }
 
-  XeCryptShaUpdate_entry(sha_state_ptr->sha_state, key_2.data(), key_size_);
-  XeCryptShaUpdate_entry(&sha_state_ptr->sha_state[1], key_1.data(), key_size_);
+  std::array<uint8_t, 64> key_1 = {};
+  std::array<uint8_t, 64> key_2 = {};
+  for (size_t i = 0; i < key_block.size(); ++i) {
+    key_1[i] = key_block[i] ^ 0x5C;
+    key_2[i] = key_block[i] ^ 0x36;
+  }
+
+  XeCryptShaUpdate_entry(sha_state_ptr->sha_state, key_2.data(),
+                         uint32_t(key_2.size()));
+  XeCryptShaUpdate_entry(&sha_state_ptr->sha_state[1], key_1.data(),
+                         uint32_t(key_1.size()));
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptHmacShaInit, kNone, kImplemented);
 
