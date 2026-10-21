@@ -470,6 +470,7 @@ int InstrEmit_sc(PPCHIRBuilder& f, const InstrData& i) {
     // address of the call and may send execution elsewhere afterwards.
     f.StoreContext(offsetof(PPCContext, sc_address),
                    f.LoadConstantUint64(i.address));
+    f.StoreContext(offsetof(PPCContext, sc_kind), f.LoadConstantUint64(0));
     f.CallExtern(f.builtins()->syscall_handler);
     Value* resume = f.LoadContext(offsetof(PPCContext, sc_resume), INT64_TYPE);
     f.CallIndirectTrue(resume, resume, CALL_TAIL);
@@ -488,9 +489,30 @@ int InstrEmit_sc(PPCHIRBuilder& f, const InstrData& i) {
 constexpr uint32_t TRAP_SLT = 1 << 4, TRAP_SGT = 1 << 3, TRAP_EQ = 1 << 2,
                    TRAP_ULT = 1 << 1, TRAP_UGT = 1;
 
+// A trap in an emulated user mode's code goes to its kernel (as a program
+// interrupt would): through the system call path, flagged as a trap, at the
+// trap's address. `cond` null for an unconditional trap.
+static void EmitUserModeTrap(PPCHIRBuilder& f, const InstrData& i,
+                             Value* cond) {
+  Label* skip = nullptr;
+  if (cond) {
+    skip = f.NewLabel();
+    f.BranchFalse(cond, skip);
+  }
+  f.StoreContext(offsetof(PPCContext, sc_address),
+                 f.LoadConstantUint64(i.address));
+  f.StoreContext(offsetof(PPCContext, sc_kind), f.LoadConstantUint64(1));
+  f.CallExtern(f.builtins()->syscall_handler);
+  Value* resume = f.LoadContext(offsetof(PPCContext, sc_resume), INT64_TYPE);
+  f.CallIndirectTrue(resume, resume, CALL_TAIL);
+  if (skip) {
+    f.MarkLabel(skip);
+  }
+}
+
 int InstrEmit_trap(PPCHIRBuilder& f, const InstrData& i, Value* va, Value* vb,
                    uint32_t TO) {
-  if (cvars::ignore_trap_instructions) {
+  if (cvars::ignore_trap_instructions && !f.user_code()) {
     return 0;
   }
   // if (a < b) & TO[0] then TRAP
@@ -559,13 +581,17 @@ int InstrEmit_trap(PPCHIRBuilder& f, const InstrData& i, Value* va, Value* vb,
     }
   }
   if (v) {
-    f.TrapTrue(v);
+    if (f.user_code()) {
+      EmitUserModeTrap(f, i, v);
+    } else {
+      f.TrapTrue(v);
+    }
   }
   return 0;
 }
 
 int InstrEmit_td(PPCHIRBuilder& f, const InstrData& i) {
-  if (cvars::ignore_trap_instructions) {
+  if (cvars::ignore_trap_instructions && !f.user_code()) {
     return 0;
   }
   // a <- (RA)
@@ -581,7 +607,7 @@ int InstrEmit_td(PPCHIRBuilder& f, const InstrData& i) {
 }
 
 int InstrEmit_tdi(PPCHIRBuilder& f, const InstrData& i) {
-  if (cvars::ignore_trap_instructions) {
+  if (cvars::ignore_trap_instructions && !f.user_code()) {
     return 0;
   }
   // a <- (RA)
@@ -596,7 +622,7 @@ int InstrEmit_tdi(PPCHIRBuilder& f, const InstrData& i) {
 }
 
 int InstrEmit_tw(PPCHIRBuilder& f, const InstrData& i) {
-  if (cvars::ignore_trap_instructions) {
+  if (cvars::ignore_trap_instructions && !f.user_code()) {
     return 0;
   }
   // a <- EXTS((RA)[32:63])
@@ -614,7 +640,7 @@ int InstrEmit_tw(PPCHIRBuilder& f, const InstrData& i) {
 }
 
 int InstrEmit_twi(PPCHIRBuilder& f, const InstrData& i) {
-  if (cvars::ignore_trap_instructions) {
+  if (cvars::ignore_trap_instructions && !f.user_code()) {
     return 0;
   }
   // a <- EXTS((RA)[32:63])
@@ -623,7 +649,7 @@ int InstrEmit_twi(PPCHIRBuilder& f, const InstrData& i) {
   // if (a = EXTS(SI)) & TO[2] then TRAP
   // if (a <u EXTS(SI)) & TO[3] then TRAP
   // if (a >u EXTS(SI)) & TO[4] then TRAP
-  if (i.D.RA == 0 && i.D.RT == 0x1F) {
+  if (i.D.RA == 0 && i.D.RT == 0x1F && !f.user_code()) {
     // This is a special trap. Probably.
     uint16_t type = (uint16_t)XEEXTS16(i.D.DS);
     f.Trap(type);

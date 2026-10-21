@@ -80,6 +80,8 @@ void LeaveGlobalLock(PPCContext* ppc_context, void* arg0, void* arg1) {
   global_mutex->unlock();
 }
 
+uint32_t g_user_trace[kUserTraceSize] = {};
+std::atomic<uint32_t> g_user_trace_index{0};
 UserModeSyscallHook g_user_mode_syscall_hook = nullptr;
 
 void SyscallHandler(PPCContext* ppc_context, void* arg0, void* arg1) {

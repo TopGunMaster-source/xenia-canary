@@ -654,12 +654,29 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
 }
 
 // `sc` from user code: hand it to xefu as (record = null, trap frame).
+static std::atomic<uint32_t> g_trap_count{0};
+
 static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   UserModeState* st = t_user_mode;
   if (!st || pc->virtual_membase != g_alias_base) {
     return false;
   }
   uint32_t sc_address = uint32_t(pc->sc_address);
+  if (pc->sc_kind == 1) {
+    // A trap instruction: a program interrupt, which xefu's handler gets as
+    // an illegal instruction record at the trap's address (and its
+    // classifier tells traps apart by the instruction word).
+    if (g_trap_count.fetch_add(1) < 50) {
+      XELOGI("BACKCOMPAT trap at {:08X}", sc_address);
+    }
+    auto r = kernel_memory()->TranslateVirtual<uint8_t*>(st->record);
+    std::memset(r, 0, kRecordSize);
+    xe::store_and_swap<uint32_t>(r + kRecordCode, 0xC000001D);
+    xe::store_and_swap<uint32_t>(r + kRecordAddress, sc_address);
+    uint32_t iar = RunUserModeHandler(st, pc, st->record, sc_address);
+    pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
+    return true;
+  }
   if (g_syscall_logs.fetch_add(1) < 200) {
     XELOGI("BACKCOMPAT syscall r0={:X} at {:08X} (r3={:08X} r4={:08X})",
            uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
@@ -1131,9 +1148,9 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
       uint32_t eip = uint32_t(pc->r[2]);
       XELOGI(
           "BACKCOMPAT heartbeat: x86 EIP {:08X} ESP {:08X}, {} system calls, "
-          "{} faults, {} code sweeps, {} timer DPCs",
+          "{} faults, {} code sweeps, {} timer DPCs, {} traps",
           eip, uint32_t(pc->r[7]), g_syscall_logs.load(), g_fault_logs.load(),
-          g_sweep_count.load(), g_timer_dpc_count.load());
+          g_sweep_count.load(), g_timer_dpc_count.load(), g_trap_count.load());
       // Where it seems to stay: the x86 code around it and the registers.
       static uint32_t last_eip = 0, dumps = 0;
       if (eip == last_eip && dumps < 3) {
@@ -1167,6 +1184,14 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
                        : std::string(" ????????");
         }
         XELOGI("BACKCOMPAT   x86 stack @{:08X}:{}", esp, stack);
+        std::string trace;
+        uint32_t index = cpu::ppc::g_user_trace_index.load();
+        for (uint32_t n = 64; n > 0; --n) {
+          trace += fmt::format(
+              " {:08X}",
+              cpu::ppc::g_user_trace[(index - n) % cpu::ppc::kUserTraceSize]);
+        }
+        XELOGI("BACKCOMPAT   recent x86 EIPs (oldest first):{}", trace);
         // Once: the emulated Xbox's 64 MB of RAM (physical 0x10000000 on the
         // 360), to study offline.
         if (dumps == 1) {

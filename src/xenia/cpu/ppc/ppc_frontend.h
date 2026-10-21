@@ -10,6 +10,7 @@
 #ifndef XENIA_CPU_PPC_PPC_FRONTEND_H_
 #define XENIA_CPU_PPC_PPC_FRONTEND_H_
 
+#include <atomic>
 #include <memory>
 
 #include "xenia/base/type_pool.h"
@@ -41,6 +42,12 @@ struct PPCBuiltins {
 // it handled the call. Set by the kernel for emulated user mode.
 using UserModeSyscallHook = bool (*)(PPCContext* ppc_context);
 extern UserModeSyscallHook g_user_mode_syscall_hook;
+
+// Research: the r2 values (xefu's x86 EIP) seen when user-mode code is
+// resolved, as a ring (newest at index - 1); consecutive repeats skipped.
+constexpr uint32_t kUserTraceSize = 256;
+extern uint32_t g_user_trace[kUserTraceSize];
+extern std::atomic<uint32_t> g_user_trace_index;
 
 class PPCFrontend {
  public:

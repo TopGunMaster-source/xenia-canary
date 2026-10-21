@@ -435,6 +435,8 @@ typedef struct alignas(64) PPCContext_s {
   // instruction (0 = next instruction). Set around the syscall handler.
   uint64_t sc_address;
   uint64_t sc_resume;
+  // 0 for an sc, 1 for a trap instruction (tw/twi/td/tdi) taken in user mode.
+  uint64_t sc_kind;
 
   template <typename T = uint8_t*>
   inline T TranslateVirtual(uint32_t guest_address) XE_RESTRICT const {

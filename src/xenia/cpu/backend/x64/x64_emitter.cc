@@ -36,6 +36,7 @@
 #include "xenia/cpu/hir/instr.h"
 #include "xenia/cpu/hir/opcodes.h"
 #include "xenia/cpu/hir/value.h"
+#include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/symbol.h"
 #include "xenia/cpu/thread_state.h"
@@ -674,6 +675,12 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
     }
   }
   if (!IsInIndirectionTable(static_cast<uint32_t>(target_address))) {
+    uint32_t eip = uint32_t(guest_context->r[2]);
+    uint32_t index = ppc::g_user_trace_index.load(std::memory_order_relaxed);
+    if (ppc::g_user_trace[(index - 1) % ppc::kUserTraceSize] != eip) {
+      ppc::g_user_trace[index % ppc::kUserTraceSize] = eip;
+      ppc::g_user_trace_index.store(index + 1, std::memory_order_relaxed);
+    }
     static std::atomic<uint32_t> user_resolves{0};
     if (user_resolves.fetch_add(1) < 400) {
       int stack_marker;
