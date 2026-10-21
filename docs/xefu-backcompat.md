@@ -185,3 +185,33 @@ Diffing the structure at `KeCreateUserMode`'s `r4` (`T`) around TB flushes:
 
 The Xbox RAM's 64 KB pages are mapped before user mode is entered; xefu's
 handler finds them valid on the first fault and only flushes the TB.
+
+## The emulated Xbox boot (observed)
+
+xefu boots a real x86 Xbox kernel (the `xb1krnl` resource of xefu7.xex,
+loaded at 0x80010000) on its x86-to-PowerPC translator.
+
+* **Interrupts.** xefu's PIC emulation sets the pending byte at state+0x254
+  and, when IF is set, ORs 0x08000000 (CR bit 4) into the CR slot of the
+  user thread's trap frame (`[KTHREAD+0x128]+0x1B0`). The dispatcher entry
+  tests that bit (`bt 4`) and takes the interrupt. Xenia has to set
+  `KTHREAD+0x128` to the user trap frame and copy that bit into the live CR.
+* **Timers.** xefu's clock DPC re-arms itself for 1 ms; timers must fire on
+  1 ms ticks, not immediately.
+* **Port I/O.** x86 `in`/`out` look up a per-port handler table
+  (`[state-0x3FFC]`, index table at `[state-0x3FF8]`); ports with no PowerPC
+  handler go to `sc 0xA` (in) / `sc 0xB` (out), port in r11, size in r12,
+  value in r3. Handled devices: PCI config (CF8/CFC), ACPI (8000-80FF),
+  SMBus (C000-C00F: SMC at 0x20, EEPROM at 0xA8), PIT (40-4F), RTC (70-72).
+* **Hypercalls.** `0F 3F aa bb` becomes `li r11, 0xbbaa; bl <group stub>`.
+  Group 06 (`B9FF9D7C`) handles 0630/0632 as `sc 0x15`/`sc 0x16`, 0660-0669
+  record the title's sections in the state block. Group 04 and other codes
+  are queued (64-byte records, ring at `[state+0x2A0]`) or handed to xefu's
+  worker thread synchronously (state+0x260.., done flag at state+0x29C).
+* **EEPROM.** xefu builds an EEPROM image and encrypts it the Xbox way:
+  `HMAC-SHA1(key, data)` for the hash, `RC4(HMAC-SHA1(key, hash))` over the
+  0x1C data bytes; the key is all zeros, as is the kernel's
+  `XboxEEPROMKey`. Phase 1 decrypts and checks it; on a mismatch it sets the
+  front LED to 0xA0 and terminates its thread, which leaves the kernel in
+  the idle loop. Xenia's `XeCryptRc4Key` used to ignore the key length (it
+  always cycled 16 bytes), which broke this.
