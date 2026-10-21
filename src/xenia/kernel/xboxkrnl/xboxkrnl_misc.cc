@@ -1091,7 +1091,22 @@ static std::atomic<uint32_t> g_fault_logs{0};
   xe::store_and_swap<uint32_t>(r + kRecordParamCount, 2);
   xe::store_and_swap<uint32_t>(r + kRecordParams, fault.is_write ? 1 : 0);
   xe::store_and_swap<uint32_t>(r + kRecordParams + 4, fault.address);
-  return RunUserModeHandler(st, pc, st->record, fault.iar);
+  uint64_t before[32];
+  std::memcpy(before, pc->r, sizeof(before));
+  uint32_t resume = RunUserModeHandler(st, pc, st->record, fault.iar);
+  // What xefu's handler changed, for the first faults it emulates.
+  static std::atomic<uint32_t> diff_logs{0};
+  if (diff_logs.fetch_add(1) < 40) {
+    std::string changes;
+    for (int i = 0; i < 32; ++i) {
+      if (pc->r[i] != before[i]) {
+        changes += fmt::format(" r{}:{:X}->{:X}", i, before[i], pc->r[i]);
+      }
+    }
+    XELOGI("BACKCOMPAT   handler resumed at {:08X}; changed:{}", resume,
+           changes.empty() ? std::string(" nothing") : changes);
+  }
+  return resume;
 }
 
 #if XE_USER_MODE_FAULTS

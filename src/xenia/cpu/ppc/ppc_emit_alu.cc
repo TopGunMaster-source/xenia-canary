@@ -406,14 +406,15 @@ int InstrEmit_mulli(PPCHIRBuilder& f, const InstrData& i) {
 
 int InstrEmit_mullwx(PPCHIRBuilder& f, const InstrData& i) {
   // RT <- (RA)[32:63] × (RB)[32:63]
-  if (i.XO.OE) {
-    // With XER update.
-    XEINSTRNOTIMPLEMENTED();
-  }
   Value* v = f.Mul(
       f.SignExtend(f.Truncate(f.LoadGPR(i.XO.RA), INT32_TYPE), INT64_TYPE),
       f.SignExtend(f.Truncate(f.LoadGPR(i.XO.RB), INT32_TYPE), INT64_TYPE));
   f.StoreGPR(i.XO.RT, v);
+  if (i.XO.OE) {
+    // Overflows when the 64-bit product isn't a sign-extended 32-bit value.
+    Value* narrowed = f.SignExtend(f.Truncate(v, INT32_TYPE), INT64_TYPE);
+    f.StoreOV(f.CompareNE(narrowed, v));
+  }
   if (i.XO.Rc) {
     f.UpdateCR(0, v);
   }
