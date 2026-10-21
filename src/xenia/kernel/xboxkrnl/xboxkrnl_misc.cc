@@ -1122,11 +1122,39 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
       if (!pc) {
         continue;
       }
+      uint32_t eip = uint32_t(pc->r[2]);
       XELOGI(
           "BACKCOMPAT heartbeat: x86 EIP {:08X} ESP {:08X}, {} system calls, "
           "{} faults, {} code sweeps",
-          uint32_t(pc->r[2]) & 0x7FFFFFFFu, uint32_t(pc->r[7]) & 0x7FFFFFFFu,
-          g_syscall_logs.load(), g_fault_logs.load(), g_sweep_count.load());
+          eip, uint32_t(pc->r[7]), g_syscall_logs.load(), g_fault_logs.load(),
+          g_sweep_count.load());
+      // Where it seems to stay: the x86 code around it and the registers.
+      static uint32_t last_eip = 0, dumps = 0;
+      if (eip == last_eip && dumps < 3) {
+        ++dumps;
+        std::string regs;
+        for (int n = 0; n < 32; ++n) {
+          regs += fmt::format(" r{}={:X}", n, uint32_t(pc->r[n]));
+        }
+        XELOGI("BACKCOMPAT   registers:{}", regs);
+        for (uint32_t line = 0; line < 8; ++line) {
+          std::string bytes;
+          uint32_t start = (eip & ~0xFu) - 0x40 + line * 16;
+          for (uint32_t n = 0; n < 16; ++n) {
+            uint32_t physical;
+            if (TranslateUserAddress(start + n, false, &physical)) {
+              bytes += fmt::format(
+                  " {:02X}",
+                  *kernel_memory()->TranslatePhysical<const uint8_t*>(
+                      physical));
+            } else {
+              bytes += " ??";
+            }
+          }
+          XELOGI("BACKCOMPAT   x86 @{:08X}:{}", start, bytes);
+        }
+      }
+      last_eip = eip;
     }
   }).detach();
 }
