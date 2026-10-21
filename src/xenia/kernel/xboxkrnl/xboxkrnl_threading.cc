@@ -8,6 +8,9 @@
  */
 
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
+
+#include <vector>
+
 #include "xenia/base/atomic.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/platform.h"
@@ -1619,6 +1622,51 @@ void KeInitializeDpc_entry(pointer_t<XDPC> dpc, lpvoid_t routine,
 }
 DECLARE_XBOXKRNL_EXPORT2(KeInitializeDpc, kThreading, kImplemented, kSketchy);
 
+// DPCs queued by a DPC routine Xenia is running inline on this thread. They
+// run after it returns, as on hardware a DPC never preempts another; running
+// them nested instead recurses without bound when a DPC re-queues work that
+// queues it again (xefu's interrupt emulation does).
+struct DeferredDpc {
+  uint32_t dpc, arg1, arg2;
+};
+static thread_local bool t_running_inline_dpc = false;
+static thread_local std::vector<DeferredDpc> t_deferred_dpcs;
+static thread_local size_t t_next_deferred_dpc = 0;
+
+static void RunDpcInline(uint32_t dpc_address, uint32_t arg1, uint32_t arg2) {
+  auto memory = kernel_state()->memory();
+  auto dpc = memory->TranslateVirtual<XDPC*>(dpc_address);
+  uint32_t routine = dpc->routine;
+  if (!routine) {
+    return;
+  }
+  auto thread = XThread::GetCurrentThread();
+  if (!thread) {
+    return;
+  }
+  auto thread_state = thread->thread_state();
+  auto ppc_context = thread_state->context();
+  auto kpcr = ppc_context->TranslateVirtualGPR<X_KPCR*>(ppc_context->r[13]);
+
+  // If we're already inside a DPC (one the kernel itself is running), skip
+  // the impersonation — we're already at DISPATCH_IRQL.
+  bool already_in_dpc = kpcr->prcb_data.dpc_active != 0;
+
+  DPCImpersonationScope dpc_scope{};
+  if (!already_in_dpc) {
+    kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
+  }
+
+  uint64_t args[] = {dpc_address, (uint64_t)dpc->context, (uint64_t)arg1,
+                     (uint64_t)arg2};
+  kernel_state()->processor()->Execute(thread_state, routine, args,
+                                       xe::countof(args));
+
+  if (!already_in_dpc) {
+    kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
+  }
+}
+
 dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
                                       dword_t arg2) {
   uint32_t list_entry_ptr = dpc.guest_address() + 4;
@@ -1626,6 +1674,21 @@ dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
   // Lock dispatcher.
   auto global_lock = xe::global_critical_region::AcquireDirect();
   auto dpc_list = kernel_state()->dpc_list();
+
+  if (t_running_inline_dpc) {
+    // Queued from inside a DPC routine: run it once that one returns. A DPC
+    // that's already waiting isn't queued twice.
+    for (size_t n = t_next_deferred_dpc; n < t_deferred_dpcs.size(); ++n) {
+      if (t_deferred_dpcs[n].dpc == dpc.guest_address()) {
+        return 0;
+      }
+    }
+    dpc->arg1 = (uint32_t)arg1;
+    dpc->arg2 = (uint32_t)arg2;
+    t_deferred_dpcs.push_back(
+        {dpc.guest_address(), uint32_t(arg1), uint32_t(arg2)});
+    return 1;
+  }
 
   // Prep DPC.
   dpc->arg1 = (uint32_t)arg1;
@@ -1639,33 +1702,16 @@ dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
   // KPCR is valid for the target CPU.  The calling thread's KPCR satisfies
   // this for the common case (desired_cpu_number == 0, meaning current CPU).
   // Inline dispatch also avoids latency issues with shared work queues.
-  uint32_t routine = dpc->routine;
-  if (routine) {
-    auto thread = XThread::GetCurrentThread();
-    if (thread) {
-      auto thread_state = thread->thread_state();
-      auto ppc_context = thread_state->context();
-      auto kpcr = ppc_context->TranslateVirtualGPR<X_KPCR*>(ppc_context->r[13]);
-
-      // If we're already inside a DPC (reentrant KeInsertQueueDpc from a DPC
-      // routine), skip the impersonation — we're already at DISPATCH_IRQL.
-      bool already_in_dpc = kpcr->prcb_data.dpc_active != 0;
-
-      DPCImpersonationScope dpc_scope{};
-      if (!already_in_dpc) {
-        kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
-      }
-
-      uint64_t args[] = {dpc.guest_address(), (uint64_t)dpc->context,
-                         (uint64_t)arg1, (uint64_t)arg2};
-      kernel_state()->processor()->Execute(thread_state, routine, args,
-                                           xe::countof(args));
-
-      if (!already_in_dpc) {
-        kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
-      }
-    }
+  t_running_inline_dpc = true;
+  RunDpcInline(dpc.guest_address(), arg1, arg2);
+  // Then whatever it queued, in order (each may queue more).
+  while (t_next_deferred_dpc < t_deferred_dpcs.size()) {
+    DeferredDpc deferred = t_deferred_dpcs[t_next_deferred_dpc++];
+    RunDpcInline(deferred.dpc, deferred.arg1, deferred.arg2);
   }
+  t_deferred_dpcs.clear();
+  t_next_deferred_dpc = 0;
+  t_running_inline_dpc = false;
 
   return 1;
 }
