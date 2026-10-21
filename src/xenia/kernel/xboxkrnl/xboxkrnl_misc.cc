@@ -309,6 +309,12 @@ static uint32_t UserToKernelAddress(uint32_t user_address) {
 dword_result_t KeCreateUserMode_entry(const ppc_context_t& ctx) {
   g_dpcs_on_timer_thread = true;
   g_user_page_table = uint32_t(ctx->r[4]);
+  // xefu writes through a null pointer (its WriteFile wrapper stores the byte
+  // count even when the caller passes no place for it), which the 360 allows,
+  // so the zero page must be writable.
+  if (auto heap = kernel_state()->memory()->LookupHeap(0)) {
+    heap->Protect(0, 0x10000, kMemoryProtectRead | kMemoryProtectWrite);
+  }
   LogBackcompatCall("KeCreateUserMode", ctx);
   DumpGuest("r4", uint32_t(ctx->r[4]), 0x1000);
   DumpGuest("r6", uint32_t(ctx->r[6]), 0x800);
@@ -1685,17 +1691,87 @@ dword_result_t KeSweepIcacheRange_entry(const ppc_context_t& ctx) {
 }
 DECLARE_XBOXKRNL_EXPORT1(KeSweepIcacheRange, kNone, kStub);
 
+// MmLockAndMapSegmentArray(unknown, segments, length, unknown) maps the pages
+// listed in a segment array (one page-aligned virtual address per entry) at
+// one contiguous virtual address and returns that address.
+// MmUnlockAndUnmapSegmentArray(address) undoes it. xefu uses the pair to copy
+// file data into the emulated Xbox's RAM, whose pages are scattered. Xenia
+// can't remap guest pages, so the mapping is a bounce buffer: it starts as a
+// copy of the pages and is copied back into them when unmapped.
+struct SegmentArrayMapping {
+  uint32_t base;
+  uint32_t length;
+  std::vector<uint32_t> pages;
+};
+static std::mutex g_segment_mapping_mutex;
+static std::vector<SegmentArrayMapping> g_segment_mappings;
+
 dword_result_t MmLockAndMapSegmentArray_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("MmLockAndMapSegmentArray", ctx, 3, 0x40);
-  return X_STATUS_SUCCESS;
+  static std::atomic<uint32_t> calls{0};
+  if (calls.fetch_add(1) < 20) {
+    LogBackcompatCall("MmLockAndMapSegmentArray", ctx, 3, 0x40);
+  }
+  uint32_t segments = uint32_t(ctx->r[4]);
+  uint32_t length = uint32_t(ctx->r[5]);
+  uint32_t page_count = (length + 0xFFF) >> 12;
+  if (!segments || !page_count || page_count > 0x4000) {
+    return 0;
+  }
+  auto memory = kernel_state()->memory();
+  SegmentArrayMapping mapping;
+  mapping.length = page_count << 12;
+  mapping.base = memory->SystemHeapAlloc(mapping.length, 0x1000);
+  if (!mapping.base) {
+    XELOGE("BACKCOMPAT MmLockAndMapSegmentArray: out of memory for {} pages",
+           page_count);
+    return 0;
+  }
+  auto segment_list = memory->TranslateVirtual<xe::be<uint32_t>*>(segments);
+  for (uint32_t i = 0; i < page_count; ++i) {
+    uint32_t page = uint32_t(segment_list[i]) & ~0xFFFu;
+    mapping.pages.push_back(page);
+    std::memcpy(memory->TranslateVirtual(mapping.base + (i << 12)),
+                memory->TranslateVirtual(page), 0x1000);
+  }
+  uint32_t base = mapping.base;
+  std::lock_guard<std::mutex> lock(g_segment_mapping_mutex);
+  g_segment_mappings.push_back(std::move(mapping));
+  return base;
 }
-DECLARE_XBOXKRNL_EXPORT1(MmLockAndMapSegmentArray, kNone, kStub);
+DECLARE_XBOXKRNL_EXPORT1(MmLockAndMapSegmentArray, kMemory, kImplemented);
 
 dword_result_t MmUnlockAndUnmapSegmentArray_entry(const ppc_context_t& ctx) {
-  LogBackcompatCall("MmUnlockAndUnmapSegmentArray", ctx);
+  static std::atomic<uint32_t> calls{0};
+  if (calls.fetch_add(1) < 20) {
+    LogBackcompatCall("MmUnlockAndUnmapSegmentArray", ctx);
+  }
+  uint32_t address = uint32_t(ctx->r[3]);
+  SegmentArrayMapping mapping;
+  {
+    std::lock_guard<std::mutex> lock(g_segment_mapping_mutex);
+    auto it =
+        std::find_if(g_segment_mappings.begin(), g_segment_mappings.end(),
+                     [address](const SegmentArrayMapping& m) {
+                       return address >= m.base && address < m.base + m.length;
+                     });
+    if (it == g_segment_mappings.end()) {
+      XELOGW("BACKCOMPAT MmUnlockAndUnmapSegmentArray: {:08X} isn't mapped",
+             address);
+      return X_STATUS_SUCCESS;
+    }
+    mapping = std::move(*it);
+    g_segment_mappings.erase(it);
+  }
+  auto memory = kernel_state()->memory();
+  for (size_t i = 0; i < mapping.pages.size(); ++i) {
+    std::memcpy(memory->TranslateVirtual(mapping.pages[i]),
+                memory->TranslateVirtual(mapping.base + uint32_t(i << 12)),
+                0x1000);
+  }
+  memory->SystemHeapFree(mapping.base);
   return X_STATUS_SUCCESS;
 }
-DECLARE_XBOXKRNL_EXPORT1(MmUnlockAndUnmapSegmentArray, kNone, kStub);
+DECLARE_XBOXKRNL_EXPORT1(MmUnlockAndUnmapSegmentArray, kMemory, kImplemented);
 
 dword_result_t IoDismountVolume_entry(const ppc_context_t& ctx) {
   LogBackcompatCall("IoDismountVolume", ctx);
