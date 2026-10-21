@@ -1221,6 +1221,8 @@ static std::atomic<uint32_t> g_sweep_count{0};
 static std::atomic<uint32_t> g_timer_dpc_count{0};
 static std::atomic<cpu::ppc::PPCContext*> g_heartbeat_context{nullptr};
 
+static std::string DescribeKernelTimers();
+
 static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
   static std::atomic<bool> started{false};
   g_heartbeat_context = pc;
@@ -1261,6 +1263,7 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
                           state_word(0x2A0), state_word(-0x3FBC))
                   .c_str(),
               file);
+        fputs(DescribeKernelTimers().c_str(), file);
         for (const auto& trace : shim::g_thread_export_traces) {
           cpu::Export* thread_export = trace.last_export.load();
           if (thread_export) {
@@ -1681,6 +1684,25 @@ static std::condition_variable g_kernel_timer_cv;
 static std::vector<PendingKernelTimer> g_kernel_timers;
 static object_ref<XHostThread> g_kernel_timer_thread;
 
+// The pending kernel timers, for the heartbeat (which mustn't block on them).
+static std::string DescribeKernelTimers() {
+  std::unique_lock<std::mutex> lock(g_kernel_timer_mutex, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    return "  kernel timers: (locked)\n";
+  }
+  auto now = std::chrono::steady_clock::now();
+  std::string text =
+      fmt::format("  kernel timers ({}):", g_kernel_timers.size());
+  for (const auto& timer : g_kernel_timers) {
+    text += fmt::format(
+        " {:08X} dpc {:08X} in {} ms period {} ms;", timer.timer, timer.dpc,
+        std::chrono::duration_cast<std::chrono::milliseconds>(timer.due - now)
+            .count(),
+        timer.period.count());
+  }
+  return text + "\n";
+}
+
 static bool RemoveKernelTimer(uint32_t timer) {
   for (auto it = g_kernel_timers.begin(); it != g_kernel_timers.end(); ++it) {
     if (it->timer == timer) {
@@ -1788,6 +1810,18 @@ dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
     auto now_ticks = duration_cast<milliseconds>(now - epoch).count() + 1;
     due = epoch + milliseconds(std::max(ticks, now_ticks));
   }
+  {
+    static std::atomic<uint32_t> far_logs{0};
+    if (due - now > std::chrono::seconds(1) && far_logs.fetch_add(1) < 20) {
+      XELOGW(
+          "BACKCOMPAT KeSetTimerEx({:08X}) due in {} ms (due time {:X}), "
+          "lr={:08X}",
+          timer,
+          std::chrono::duration_cast<std::chrono::milliseconds>(due - now)
+              .count(),
+          uint64_t(due_time), uint32_t(ctx->lr));
+    }
+  }
   auto header = &kernel_memory()->TranslateVirtual<X_KTIMER*>(timer)->header;
   header->signal_state = 0;
   bool was_set;
@@ -1810,6 +1844,10 @@ dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
 DECLARE_XBOXKRNL_EXPORT1(KeSetTimerEx, kThreading, kSketchy);
 
 dword_result_t KeCancelTimer_entry(const ppc_context_t& ctx) {
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 20) {
+    LogBackcompatCall("KeCancelTimer", ctx);
+  }
   bool was_set;
   {
     std::lock_guard<std::mutex> lock(g_kernel_timer_mutex);
