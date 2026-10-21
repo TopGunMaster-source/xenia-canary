@@ -724,6 +724,9 @@ constexpr uint32_t kSyscallRingSize = 16384;
 static SyscallRecord g_syscall_ring[kSyscallRingSize];
 static std::atomic<uint32_t> g_syscall_ring_index{0};
 
+static bool TranslateUserAddress(uint32_t address, bool write,
+                                 uint32_t* physical_out);
+
 static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   XEFU_PHASE();
   UserModeState* st = t_user_mode;
@@ -750,6 +753,38 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
     XELOGI("BACKCOMPAT syscall r0={:X} at {:08X} (r3={:08X} r4={:08X})",
            uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
            uint32_t(pc->r[4]));
+  }
+  // The emulated Xbox kernel giving up on a title: its reboot-to-dashboard
+  // path (hypercall 0x0702 at 0x80024627, reached through sc 0x10). Log the
+  // registers and the x86 stack once, which hold the failure status.
+  if (uint32_t(pc->r[0]) == 0x10 && uint32_t(pc->r[2]) == 0x80024627) {
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+      std::string regs;
+      for (int n = 0; n < 32; ++n) {
+        regs += fmt::format(" r{}={:X}", n, uint32_t(pc->r[n]));
+      }
+      XELOGW("BACKCOMPAT the Xbox kernel is returning to the dashboard:{}",
+             regs);
+      std::string stack;
+      uint32_t esp = uint32_t(pc->r[7]);
+      for (uint32_t n = 0; n < 64; ++n) {
+        uint32_t value = 0;
+        bool ok = true;
+        for (uint32_t b = 0; b < 4 && ok; ++b) {
+          uint32_t physical;
+          ok = TranslateUserAddress(esp + 4 * n + b, false, &physical);
+          if (ok) {
+            value |=
+                uint32_t(*kernel_memory()->TranslatePhysical<const uint8_t*>(
+                    physical))
+                << (8 * b);
+          }
+        }
+        stack += ok ? fmt::format(" {:08X}", value) : std::string(" ????????");
+      }
+      XELOGW("BACKCOMPAT   x86 stack @{:08X}:{}", esp, stack);
+    }
   }
   SyscallRecord& rec =
       g_syscall_ring[g_syscall_ring_index.fetch_add(1) % kSyscallRingSize];
