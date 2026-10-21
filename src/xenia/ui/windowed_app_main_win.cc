@@ -19,6 +19,7 @@
 
 #include "version.h"
 
+#include <DbgHelp.h>
 #include <Psapi.h>
 
 DEFINE_bool(enable_console, false, "Open a console window with the main window",
@@ -129,7 +130,7 @@ void HostExceptionReport::AddString(const char* s) {
 }
 
 const char* HostExceptionReport::GetFormattedAddress(uintptr_t address) {
-  char (&current_buffer)[128] =
+  char(&current_buffer)[128] =
       formatted_addresses[address_format_ring_index++ % 16];
 
   /* if (address >= g_xenia_exe_base &&
@@ -291,7 +292,64 @@ static ExceptionInfoCategoryHandler host_exception_category_handlers[] = {
     exception_ntstatus_error_handle, exception_cerror_handle,
     thread_name_handle};
 
+// Writes xenia_crash.dmp beside the executable, from a new thread (the
+// crashing one may be out of stack). dbghelp is loaded on demand.
+struct CrashDumpRequest {
+  _EXCEPTION_POINTERS* exception;
+  DWORD thread_id;
+};
+static DWORD WINAPI WriteCrashDumpThread(LPVOID param) {
+  auto request = static_cast<CrashDumpRequest*>(param);
+  using MiniDumpWriteDumpFn = BOOL(WINAPI*)(
+      HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
+      PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
+  HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
+  if (!dbghelp) {
+    return 1;
+  }
+  auto write_dump = reinterpret_cast<MiniDumpWriteDumpFn>(
+      GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+  wchar_t path[MAX_PATH];
+  DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  while (length && path[length - 1] != L'\\') {
+    --length;
+  }
+  path[length] = 0;
+  wcscat_s(path, L"xenia_crash.dmp");
+  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (write_dump && file != INVALID_HANDLE_VALUE) {
+    MINIDUMP_EXCEPTION_INFORMATION info;
+    info.ThreadId = request->thread_id;
+    info.ExceptionPointers = request->exception;
+    info.ClientPointers = FALSE;
+    write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
+               MINIDUMP_TYPE(MiniDumpWithThreadInfo |
+                             MiniDumpWithIndirectlyReferencedMemory |
+                             MiniDumpWithDataSegs),
+               &info, nullptr, nullptr);
+  }
+  if (file != INVALID_HANDLE_VALUE) {
+    CloseHandle(file);
+  }
+  return 0;
+}
+static void WriteCrashDump(_EXCEPTION_POINTERS* exception) {
+  static LONG written = 0;
+  if (InterlockedExchange(&written, 1)) {
+    return;
+  }
+  CrashDumpRequest request{exception, GetCurrentThreadId()};
+  HANDLE thread =
+      CreateThread(nullptr, 0, WriteCrashDumpThread, &request, 0, nullptr);
+  if (thread) {
+    WaitForSingleObject(thread, 60000);
+    CloseHandle(thread);
+  }
+}
+
 LONG _UnhandledExceptionFilter(_EXCEPTION_POINTERS* ExceptionInfo) {
+  WriteCrashDump(ExceptionInfo);
   HostExceptionReport report{ExceptionInfo};
   for (auto&& handler : host_exception_category_handlers) {
     __try {
