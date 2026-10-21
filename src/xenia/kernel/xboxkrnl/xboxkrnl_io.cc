@@ -691,6 +691,12 @@ dword_result_t NtDeviceIoControlFile_entry(
     auto buffer = output_buffer.as<X_PARTITION_INFO*>();
     buffer->unk = 0;
     buffer->total_size = cache_size;
+  } else if (io_control_code == X_IOCTL_CDROM_CHECK_MEDIA) {
+    // The disc is always present.
+    if (io_status_block) {
+      io_status_block->status = X_STATUS_SUCCESS;
+      io_status_block->information = 0;
+    }
   } else {
     XELOGD("NtDeviceIoControlFile(0x{:X}) - unhandled IOCTL!",
            uint32_t(io_control_code));
