@@ -632,8 +632,38 @@ static uint32_t ReadFrame(UserModeState* st, cpu::ppc::PPCContext* pc) {
 // (record 0 for a system call), with the user registers currently in `pc`.
 // Returns the address to resume user code at; `pc` holds the user registers
 // as the handler left them.
+// Interrupts for user mode. xefu (in a DPC or another thread) raises an
+// interrupt for the emulated x86 by setting CR bit 4 (cr1.lt) in the user
+// thread's trap frame, which it finds through the thread's KTHREAD (+0x128),
+// as the 360 kernel keeps it while user mode is interrupted. xefu's
+// dispatcher tests that bit on entry. In Xenia user code keeps running
+// meanwhile, so the bit is carried over to the live registers: right after
+// DPCs, and before every entry into xefu's handler.
+constexpr uint32_t kCrInterruptBit = 0x08000000u;  // CR bit 4
+static std::atomic<cpu::ppc::PPCContext*> g_user_context{nullptr};
+static std::atomic<uint32_t> g_user_interrupt_frame{0};
+static std::atomic<uint32_t> g_interrupt_flags{0};
+
+static void PropagateUserInterruptFlag() {
+  uint32_t frame = g_user_interrupt_frame.load();
+  auto pc = g_user_context.load();
+  if (!frame || !pc) {
+    return;
+  }
+  auto cr =
+      kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(frame + kFrameCr);
+  uint32_t value = *cr;
+  if (value & kCrInterruptBit) {
+    *cr = value & ~kCrInterruptBit;
+    // cr1.lt: the byte for CR bit 4.
+    reinterpret_cast<volatile uint8_t*>(&pc->cr0)[4] = 1;
+    g_interrupt_flags.fetch_add(1);
+  }
+}
+
 static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
                                    uint32_t record, uint32_t iar) {
+  PropagateUserInterruptFlag();
   std::memcpy(&st->user_regs, pc, sizeof(*pc));
   WriteFrame(st, iar);
 
@@ -1148,9 +1178,11 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
       uint32_t eip = uint32_t(pc->r[2]);
       XELOGI(
           "BACKCOMPAT heartbeat: x86 EIP {:08X} ESP {:08X}, {} system calls, "
-          "{} faults, {} code sweeps, {} timer DPCs, {} traps",
+          "{} faults, {} code sweeps, {} timer DPCs, {} traps, {} interrupts "
+          "raised",
           eip, uint32_t(pc->r[7]), g_syscall_logs.load(), g_fault_logs.load(),
-          g_sweep_count.load(), g_timer_dpc_count.load(), g_trap_count.load());
+          g_sweep_count.load(), g_timer_dpc_count.load(), g_trap_count.load(),
+          g_interrupt_flags.load());
       // Where it seems to stay: the x86 code around it and the registers.
       static uint32_t last_eip = 0, dumps = 0;
       if (eip == last_eip && dumps < 3) {
@@ -1309,6 +1341,12 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   state->guest_stack_depth = backend->GetGuestStackDepth(pc);
   t_user_mode = state;
   StartUserModeHeartbeat(pc);
+  // The trap frame xefu raises interrupts in (see PropagateUserInterruptFlag).
+  auto kthread = thread->guest_object<X_KTHREAD>();
+  uint32_t previous_trap_frame = kthread->unk_128;
+  kthread->unk_128 = state->frame;
+  g_user_interrupt_frame = state->frame;
+  g_user_context = pc;
   uint32_t status = X_STATUS_SUCCESS;
   try {
     // Only memory (state) is reliable after a restart: locals changed past
@@ -1336,6 +1374,9 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
     status = exit.status;
   }
   t_user_mode = previous;
+  g_user_interrupt_frame = 0;
+  g_user_context = nullptr;
+  kthread->unk_128 = previous_trap_frame;
   std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
   kernel_memory()->SystemHeapFree(st->record);
   kernel_memory()->SystemHeapFree(st->frame);
@@ -1584,6 +1625,7 @@ static int KernelTimerThreadMain() {
     kernel_state()->processor()->Execute(thread_state, routine, args,
                                          xe::countof(args));
     kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
+    PropagateUserInterruptFlag();
   }
   return 0;
 }
