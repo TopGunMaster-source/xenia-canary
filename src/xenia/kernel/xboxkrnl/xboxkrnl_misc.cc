@@ -686,6 +686,15 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
 // `sc` from user code: hand it to xefu as (record = null, trap frame).
 static std::atomic<uint32_t> g_trap_count{0};
 
+// The most recent system calls from user code, logged at a stall: ports and
+// values (x86 port I/O goes through sc 0xA/0xB with the port in r12).
+struct SyscallRecord {
+  uint32_t number, eip, r3, r4, r11, r12, r3_after, r11_after;
+};
+constexpr uint32_t kSyscallRingSize = 16384;
+static SyscallRecord g_syscall_ring[kSyscallRingSize];
+static std::atomic<uint32_t> g_syscall_ring_index{0};
+
 static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
   UserModeState* st = t_user_mode;
   if (!st || pc->virtual_membase != g_alias_base) {
@@ -712,9 +721,19 @@ static bool UserModeSyscallHook(cpu::ppc::PPCContext* pc) {
            uint32_t(pc->r[0]), sc_address, uint32_t(pc->r[3]),
            uint32_t(pc->r[4]));
   }
+  SyscallRecord& rec =
+      g_syscall_ring[g_syscall_ring_index.fetch_add(1) % kSyscallRingSize];
+  rec.number = uint32_t(pc->r[0]);
+  rec.eip = uint32_t(pc->r[2]);
+  rec.r3 = uint32_t(pc->r[3]);
+  rec.r4 = uint32_t(pc->r[4]);
+  rec.r11 = uint32_t(pc->r[11]);
+  rec.r12 = uint32_t(pc->r[12]);
   // Like SRR0 for a system call, the frame's IAR is the instruction after
   // the sc; xefu leaves it there to return normally.
   uint32_t iar = RunUserModeHandler(st, pc, 0, sc_address + 4);
+  rec.r3_after = uint32_t(pc->r[3]);
+  rec.r11_after = uint32_t(pc->r[11]);
   pc->sc_resume = (iar == sc_address + 4) ? 0 : iar;
   return true;
 }
@@ -1224,6 +1243,27 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
               cpu::ppc::g_user_trace[(index - n) % cpu::ppc::kUserTraceSize]);
         }
         XELOGI("BACKCOMPAT   recent x86 EIPs (oldest first):{}", trace);
+        if (dumps == 1) {
+          uint32_t end = g_syscall_ring_index.load();
+          uint32_t count = std::min(end, kSyscallRingSize);
+          auto path =
+              kernel_state()->emulator()->storage_root() / "xefu_syscalls.txt";
+          if (FILE* file = xe::filesystem::OpenFile(path, "w")) {
+            for (uint32_t n = count; n > 0; --n) {
+              const SyscallRecord& r =
+                  g_syscall_ring[(end - n) % kSyscallRingSize];
+              std::string line = fmt::format(
+                  "{} {:X} eip={:08X} r3={:08X} r4={:08X} r11={:08X} "
+                  "r12={:08X} -> r3={:08X} r11={:08X}\n",
+                  end - n, r.number, r.eip, r.r3, r.r4, r.r11, r.r12,
+                  r.r3_after, r.r11_after);
+              fputs(line.c_str(), file);
+            }
+            fclose(file);
+            XELOGI("BACKCOMPAT   wrote {} system calls to {}", count,
+                   xe::path_to_utf8(path));
+          }
+        }
         // Once: the emulated Xbox's 64 MB of RAM (physical 0x10000000 on the
         // 360), to study offline.
         if (dumps == 1) {
