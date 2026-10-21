@@ -199,7 +199,7 @@ RegExp ComputeMemoryAddress(X64Emitter& e, const T& guest) {
       return e.GetMembaseReg() + address;
     } else {
       if (address >= 0xE0000000 &&
-          xe::memory::allocation_granularity() > 0x1000) {
+          e.emulate_e0_offset()) {
         e.mov(e.eax, address + 0x1000);
       } else {
         e.mov(e.eax, address);
@@ -207,7 +207,7 @@ RegExp ComputeMemoryAddress(X64Emitter& e, const T& guest) {
       return e.GetMembaseReg() + e.rax;
     }
   } else {
-    if (xe::memory::allocation_granularity() > 0x1000 &&
+    if (e.emulate_e0_offset() &&
         !is_definitely_not_eo(guest)) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
@@ -251,7 +251,7 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
       return e.GetMembaseReg() + address;
     } else {
       if (address >= 0xE0000000 &&
-          xe::memory::allocation_granularity() > 0x1000) {
+          e.emulate_e0_offset()) {
         e.mov(e.eax, address + 0x1000);
       } else {
         e.mov(e.eax, address);
@@ -259,7 +259,7 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
       return e.GetMembaseReg() + e.rax;
     }
   } else {
-    if (xe::memory::allocation_granularity() > 0x1000 &&
+    if (e.emulate_e0_offset() &&
         !is_definitely_not_eo(guest)) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
@@ -523,7 +523,7 @@ struct ATOMIC_COMPARE_EXCHANGE_I32
                I<OPCODE_ATOMIC_COMPARE_EXCHANGE, I8Op, I64Op, I32Op, I32Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
     e.mov(e.eax, i.src2);
-    if (xe::memory::allocation_granularity() > 0x1000) {
+    if (e.emulate_e0_offset()) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
       e.mov(e.ecx, i.src1.reg().cvt32());
@@ -553,7 +553,7 @@ struct ATOMIC_COMPARE_EXCHANGE_I64
                I<OPCODE_ATOMIC_COMPARE_EXCHANGE, I8Op, I64Op, I64Op, I64Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
     e.mov(e.rax, i.src2);
-    if (xe::memory::allocation_granularity() > 0x1000) {
+    if (e.emulate_e0_offset()) {
       // Emulate the 4 KB physical address offset in 0xE0000000+ when can't do
       // it via memory mapping.
       e.mov(e.ecx, i.src1.reg().cvt32());
@@ -1937,7 +1937,7 @@ struct CACHE_CONTROL
         addr = e.GetMembaseReg() + address_constant;
       } else {
         if (address_constant >= 0xE0000000 &&
-            xe::memory::allocation_granularity() > 0x1000) {
+            e.emulate_e0_offset()) {
           e.mov(e.eax, address_constant + 0x1000);
         } else {
           e.mov(e.eax, address_constant);
@@ -1945,7 +1945,7 @@ struct CACHE_CONTROL
         addr = e.GetMembaseReg() + e.rax;
       }
     } else {
-      if (xe::memory::allocation_granularity() > 0x1000) {
+      if (e.emulate_e0_offset()) {
         // Emulate the 4 KB physical address offset in 0xE0000000+ when can't
         // do it via memory mapping.
         e.mov(e.eax, i.src1.reg().cvt32());

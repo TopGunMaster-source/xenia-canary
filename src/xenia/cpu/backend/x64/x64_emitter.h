@@ -219,6 +219,12 @@ class X64Emitter : public Xbyak::CodeGenerator {
   virtual ~X64Emitter();
 
   Processor* processor() const { return processor_; }
+  // Whether guest 0xE0000000+ addresses need the 4 KB host offset emulated
+  // in code (the system allocation granularity is too big to do it with
+  // memory mapping), which user-mode code doesn't use.
+  bool emulate_e0_offset() const {
+    return !user_code_ && xe::memory::allocation_granularity() > 0x1000;
+  }
   X64Backend* backend() const { return backend_; }
 
   static uintptr_t PlaceConstData();
@@ -411,6 +417,9 @@ class X64Emitter : public Xbyak::CodeGenerator {
   Xbyak::util::Cpu cpu_;
   uint64_t feature_flags_ = 0;
   uint32_t current_guest_function_ = 0;
+  // Code of user-mode (alias space) functions, whose host views map
+  // 0xE0000000+ directly, without the 4 KB physical offset.
+  bool user_code_ = false;
   Xbyak::Label* epilog_label_ = nullptr;
 
   hir::Instr* current_instr_ = nullptr;

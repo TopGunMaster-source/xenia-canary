@@ -570,15 +570,8 @@ static bool SyncUserSpace() {
         }
       }
     }
-    if (want && address >= 0xE0000000u) {
-      // Xenia offsets host addresses of 0xE0000000+ by 4 KB, which a 64 KB
-      // view can't follow; not supported yet.
-      if (page_logs.fetch_add(1) < 20) {
-        XELOGW("BACKCOMPAT not mapping user page {:08X} (0xE0000000+)",
-               address);
-      }
-      want = 0;
-    }
+    // 0xE0000000+ is mapped like the rest: user-mode code is translated
+    // without Xenia's 4 KB host offset for those addresses.
     uint32_t have = g_alias_pages[page];
     if (want == have) {
       continue;
@@ -1165,9 +1158,6 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
     return false;
   }
   uint64_t offset = fault_address - base;
-  if (offset >= 0xE0001000ull) {
-    offset -= 0x1000;  // the host offset Xenia adds for 0xE0000000+
-  }
   st->fault.pending = true;
   st->fault.iar = iar;
   st->fault.address = uint32_t(offset);

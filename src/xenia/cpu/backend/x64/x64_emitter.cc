@@ -117,6 +117,7 @@ bool X64Emitter::Emit(GuestFunction* function, HIRBuilder* builder,
   SCOPE_profile_cpu_f("cpu");
   guest_module_ = dynamic_cast<XexModule*>(function->module());
   current_guest_function_ = function->address();
+  user_code_ = processor_->memory()->IsCodeAliasAddress(function->address());
   // Reset.
   debug_info_ = debug_info;
   debug_info_flags_ = debug_info_flags;
