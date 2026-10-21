@@ -463,6 +463,28 @@ constexpr uint32_t kUserPageCount = 1u << (32 - kUserPageShift);
 // or 0.
 static std::vector<uint32_t> g_alias_pages;
 
+// With page-granular alias views (see Memory::alias_page_granular): per 4 KB
+// page, the same, for 64 KB pages whose 4 KB pages are mapped one by one
+// (g_alias_has_small).
+static std::vector<uint32_t> g_alias_small;
+static std::vector<uint8_t> g_alias_has_small;
+
+// Unmaps the 4 KB views of a 64 KB page; returns how many there were.
+static uint32_t UnmapSmallUserPages(uint32_t page) {
+  uint32_t count = 0;
+  for (uint32_t k = 0; k < 16; ++k) {
+    uint32_t sub_page = (page << 4) | k;
+    if (g_alias_small[sub_page]) {
+      kernel_memory()->UnmapAliasRange(
+          g_alias_base, (page << kUserPageShift) + (k << 12), 0x1000);
+      g_alias_small[sub_page] = 0;
+      ++count;
+    }
+  }
+  g_alias_has_small[page] = 0;
+  return count;
+}
+
 static uint32_t PageMappingFromEntry(uint32_t entry, uint32_t physical) {
   switch (entry & 3) {
     case 2:
@@ -485,6 +507,8 @@ static bool SyncUserSpace() {
       return false;
     }
     g_alias_pages.assign(kUserPageCount, 0);
+    g_alias_has_small.assign(kUserPageCount, 0);
+    g_alias_small.assign(kUserPageCount * 16, 0);
     memory->SetCodeAliasRange(g_alias_base, kUserCodeLow, kUserCodeHigh);
     auto processor = kernel_state()->processor();
     auto module = std::make_unique<UserModeCodeModule>(processor);
@@ -519,6 +543,9 @@ static bool SyncUserSpace() {
                                   1u << kUserPageShift);
           g_alias_pages[page] = 0;
         }
+        if (g_alias_has_small[page]) {
+          UnmapSmallUserPages(page);
+        }
       }
       if (memory->MapAliasRange(g_alias_base, seg << 24, 0x01000000,
                                 entry & 0x1F000000u)) {
@@ -529,15 +556,19 @@ static bool SyncUserSpace() {
     }
   }
 
-  // 64 KB and 4 KB pages, one view per 64 KB.
+  // 64 KB and 4 KB pages: one view per 64 KB, or, where 4 KB pages don't
+  // line up and the host allows it, one per 4 KB page.
   static std::atomic<uint32_t> page_logs{0};
   uint32_t mapped = 0, unmapped = 0;
+  bool granular = memory->alias_page_granular();
   for (uint32_t page = 0; page < kUserPageCount; ++page) {
     uint32_t address = page << kUserPageShift;
     if (g_alias_entries[address >> 24]) {
       continue;  // covered by a 16 MB page
     }
     uint32_t want = 0;
+    bool use_small = false;
+    uint32_t want_small[16] = {};
     if (table[0x840 + (address >> 28)] & 2) {
       // 64 KB pages: a table per 128 MB.
       uint32_t table_page =
@@ -552,32 +583,43 @@ static bool SyncUserSpace() {
         }
       }
     } else {
-      // 4 KB pages: a table per 8 MB. A host view is 64 KB, so the 16 pages
-      // here map as one if they're physically contiguous and 64 KB aligned
-      // (unmapped ones then become accessible).
+      // 4 KB pages: a table per 8 MB. Without page-granular views, the 16
+      // pages here map as one 64 KB view if they're physically contiguous and
+      // 64 KB aligned (unmapped ones then become accessible).
       uint32_t table_page =
           xe::load_and_swap<uint16_t>(table + 2 * (address >> 23));
       if (table_page) {
         auto entries = memory->TranslatePhysical<const uint8_t*>(
             uint32_t(table_page) << 13);
-        uint32_t base = 0, access = 0;
-        bool consistent = true;
+        uint32_t base = 0, access = 0, present = 0;
+        bool consistent = true, same_access = true;
         for (uint32_t k = 0; k < 16; ++k) {
           uint32_t entry = xe::load_and_swap<uint32_t>(
               entries + 4 * (((address >> 12) & 0x7FF) + k));
-          uint32_t mapping = entry ? PageMappingFromEntry(entry, 0) : 0;
+          uint32_t mapping =
+              entry ? PageMappingFromEntry(entry, entry & 0x1FFFF000u) : 0;
+          want_small[k] = mapping;
           if (!mapping) {
             continue;
           }
+          ++present;
           uint32_t page_base = (entry & 0x1FFFF000u) - (k << 12);
           if (!access) {
             base = page_base;
-          } else if (page_base != base) {
-            consistent = false;
+          } else {
+            if (page_base != base) {
+              consistent = false;
+            }
+            if ((mapping & 3) != access) {
+              same_access = false;
+            }
           }
-          access = std::max(access, mapping);
+          access = std::max(access, mapping & 3);
         }
-        if (access && consistent && !(base & 0xFFFF)) {
+        bool whole = access && consistent && !(base & 0xFFFF);
+        if (granular && access && !(whole && present == 16 && same_access)) {
+          use_small = true;
+        } else if (whole) {
           want = base | access;
         } else if (access && page_logs.fetch_add(1) < 20) {
           XELOGW(
@@ -589,6 +631,37 @@ static bool SyncUserSpace() {
     }
     // 0xE0000000+ is mapped like the rest: user-mode code is translated
     // without Xenia's 4 KB host offset for those addresses.
+    if (use_small) {
+      if (g_alias_pages[page]) {
+        memory->UnmapAliasRange(g_alias_base, address, 1u << kUserPageShift);
+        g_alias_pages[page] = 0;
+        ++unmapped;
+      }
+      g_alias_has_small[page] = 1;
+      for (uint32_t k = 0; k < 16; ++k) {
+        uint32_t sub_page = (page << 4) | k;
+        uint32_t have_small = g_alias_small[sub_page];
+        if (want_small[k] == have_small) {
+          continue;
+        }
+        uint32_t small_address = address + (k << 12);
+        if (have_small) {
+          memory->UnmapAliasRange(g_alias_base, small_address, 0x1000);
+          ++unmapped;
+        }
+        g_alias_small[sub_page] = 0;
+        if (want_small[k] && memory->MapAliasRange(g_alias_base, small_address,
+                                                   0x1000, want_small[k] & ~3u,
+                                                   (want_small[k] & 3) == 2)) {
+          g_alias_small[sub_page] = want_small[k];
+          ++mapped;
+        }
+      }
+      continue;
+    }
+    if (g_alias_has_small[page]) {
+      unmapped += UnmapSmallUserPages(page);
+    }
     uint32_t have = g_alias_pages[page];
     if (want == have) {
       continue;
@@ -1828,6 +1901,23 @@ static void InvalidateUserCode(uint32_t physical, uint32_t length) {
   // 64 KB pages.
   for (uint32_t page = kUserCodeLow >> kUserPageShift;
        page < kUserCodeHigh >> kUserPageShift; ++page) {
+    if (!g_alias_has_small.empty() && g_alias_has_small[page]) {
+      for (uint32_t k = 0; k < 16; ++k) {
+        uint32_t sub_page = g_alias_small[(page << 4) | k];
+        if (!sub_page) {
+          continue;
+        }
+        uint32_t frame = sub_page & ~0xFFFu;
+        uint32_t low = std::max(physical, frame);
+        uint32_t high = std::min(physical_end, frame + 0x1000u);
+        if (low < high) {
+          uint32_t user = (page << kUserPageShift) + (k << 12);
+          dropped += processor->InvalidateFunctions(
+              g_user_module, user + (low - frame), user + (high - frame));
+        }
+      }
+      continue;
+    }
     uint32_t mapping = g_alias_pages.empty() ? 0 : g_alias_pages[page];
     if (!mapping) {
       continue;

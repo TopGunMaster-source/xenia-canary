@@ -26,6 +26,10 @@
 // TODO(benvanik): move xbox.h out
 #include "xenia/xbox.h"
 
+#if XE_PLATFORM_WIN32
+#include "xenia/base/platform_win.h"
+#endif
+
 DEFINE_bool(protect_zero, true, "Protect the zero page from reads and writes.",
             "Memory");
 DEFINE_bool(emit_inline_mmio_checks, false,
@@ -358,6 +362,54 @@ static const struct {
         0x0000000100000000ull,
     },
 };
+#if XE_PLATFORM_WIN32
+namespace {
+#ifndef MEM_RESERVE_PLACEHOLDER
+#define MEM_RESERVE_PLACEHOLDER 0x00040000
+#endif
+#ifndef MEM_REPLACE_PLACEHOLDER
+#define MEM_REPLACE_PLACEHOLDER 0x00004000
+#endif
+#ifndef MEM_PRESERVE_PLACEHOLDER
+#define MEM_PRESERVE_PLACEHOLDER 0x00000002
+#endif
+#ifndef MEM_COALESCE_PLACEHOLDERS
+#define MEM_COALESCE_PLACEHOLDERS 0x00000001
+#endif
+// Windows 10 1803+ placeholder functions, looked up at run time.
+struct PlaceholderApi {
+  using VirtualAlloc2Fn = PVOID(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG,
+                                         void*, ULONG);
+  using MapViewOfFile3Fn = PVOID(WINAPI*)(HANDLE, HANDLE, PVOID, ULONG64,
+                                          SIZE_T, ULONG, ULONG, void*, ULONG);
+  using UnmapViewOfFile2Fn = BOOL(WINAPI*)(HANDLE, PVOID, ULONG);
+  VirtualAlloc2Fn virtual_alloc2 = nullptr;
+  MapViewOfFile3Fn map_view_of_file3 = nullptr;
+  UnmapViewOfFile2Fn unmap_view_of_file2 = nullptr;
+  bool available() const {
+    return virtual_alloc2 && map_view_of_file3 && unmap_view_of_file2;
+  }
+};
+const PlaceholderApi& Placeholders() {
+  static const PlaceholderApi api = [] {
+    PlaceholderApi a;
+    HMODULE module = GetModuleHandleW(L"kernelbase.dll");
+    if (module) {
+      a.virtual_alloc2 = reinterpret_cast<PlaceholderApi::VirtualAlloc2Fn>(
+          GetProcAddress(module, "VirtualAlloc2"));
+      a.map_view_of_file3 = reinterpret_cast<PlaceholderApi::MapViewOfFile3Fn>(
+          GetProcAddress(module, "MapViewOfFile3"));
+      a.unmap_view_of_file2 =
+          reinterpret_cast<PlaceholderApi::UnmapViewOfFile2Fn>(
+              GetProcAddress(module, "UnmapViewOfFile2"));
+    }
+    return a;
+  }();
+  return api;
+}
+}  // namespace
+#endif  // XE_PLATFORM_WIN32
+
 uint8_t* Memory::CreateAliasSpace() {
   // Find a free 4 GB host range by reserving and immediately releasing it;
   // segments are mapped into it later with MapAliasRange.
@@ -379,11 +431,88 @@ uint8_t* Memory::CreateAliasSpace() {
     xe::memory::DeallocFixed(reserved, 0,
                              xe::memory::DeallocationType::kRelease);
     XELOGI("Alias address space at {}", static_cast<void*>(base));
+#if XE_PLATFORM_WIN32
+    // Page-granular views: reserve the space as a placeholder, and check
+    // that a 4 KB view at a 4 KB file offset works (it's documented as 64 KB
+    // only).
+    const auto& api = Placeholders();
+    if (api.available() &&
+        api.virtual_alloc2(GetCurrentProcess(), base, 0x100000000ull,
+                           MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS,
+                           nullptr, 0) == base) {
+      alias_placeholder_base_ = base;
+      alias_boundaries_ = {0, 0x100000000ull};
+      alias_page_granular_ = true;
+      // A 4 KB view at a 4 KB offset (of the top physical page, which no
+      // guest uses) against a 64 KB view of the same 64 KB: a write through
+      // the first must land at the right place in the second.
+      bool works = false;
+      constexpr uint32_t kProbePhysical = 0x1FFFE000;
+      if (MapAliasRange(base, 0x1000, 0x1000, kProbePhysical)) {
+        if (MapAliasRange(base, 0x10000, 0x10000, kProbePhysical & ~0xFFFFu)) {
+          auto sub_page = reinterpret_cast<volatile uint32_t*>(base + 0x1000);
+          auto large = reinterpret_cast<volatile uint32_t*>(
+              base + 0x10000 + (kProbePhysical & 0xFFFF));
+          uint32_t saved = *sub_page;
+          *sub_page = 0x5A17C0DE;
+          works = *large == 0x5A17C0DE;
+          *sub_page = saved;
+          UnmapAliasRange(base, 0x10000, 0x10000);
+        }
+        UnmapAliasRange(base, 0x1000, 0x1000);
+      }
+      if (works) {
+        XELOGI("Alias address space is page granular");
+      } else {
+        XELOGW("Alias address space can't map 4 KB views; using 64 KB");
+        ReleaseAliasPlaceholders();
+      }
+    }
+#endif
     return base;
   }
   XELOGE("Unable to find room for an alias address space");
   return nullptr;
 }
+
+#if XE_PLATFORM_WIN32
+// Makes `offset` a boundary between placeholders, splitting the placeholder
+// it's in. Fails if it's inside a view.
+bool Memory::SplitAliasPlaceholderAt(uint64_t offset) {
+  auto next = alias_boundaries_.lower_bound(offset);
+  if (next != alias_boundaries_.end() && *next == offset) {
+    return true;
+  }
+  if (next == alias_boundaries_.begin() || next == alias_boundaries_.end()) {
+    return false;
+  }
+  uint64_t start = *std::prev(next);
+  if (!VirtualFree(alias_placeholder_base_ + start, SIZE_T(offset - start),
+                   MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+    XELOGE("Unable to split the alias placeholder at {:X} ({:X}-{:X}): {}",
+           offset, start, *next, GetLastError());
+    return false;
+  }
+  alias_boundaries_.insert(offset);
+  return true;
+}
+
+void Memory::ReleaseAliasPlaceholders() {
+  if (!alias_placeholder_base_) {
+    return;
+  }
+  for (auto it = alias_boundaries_.begin();
+       std::next(it) != alias_boundaries_.end(); ++it) {
+    VirtualFree(alias_placeholder_base_ + *it, 0, MEM_RELEASE);
+  }
+  alias_boundaries_.clear();
+  alias_placeholder_base_ = nullptr;
+  alias_page_granular_ = false;
+}
+#else
+bool Memory::SplitAliasPlaceholderAt(uint64_t offset) { return false; }
+void Memory::ReleaseAliasPlaceholders() {}
+#endif
 
 bool Memory::MapAliasRange(uint8_t* alias_base, uint32_t guest_address,
                            uint32_t size, uint32_t physical_address,
@@ -391,6 +520,37 @@ bool Memory::MapAliasRange(uint8_t* alias_base, uint32_t guest_address,
   if (!alias_base || physical_address + uint64_t(size) > 0x20000000ull) {
     return false;
   }
+#if XE_PLATFORM_WIN32
+  if (alias_page_granular_ && alias_base == alias_placeholder_base_) {
+    std::lock_guard<std::mutex> lock(alias_mutex_);
+    uint64_t start = guest_address, end = start + size;
+    if (!SplitAliasPlaceholderAt(start) || !SplitAliasPlaceholderAt(end)) {
+      return false;
+    }
+    // Earlier, smaller views of the range left several placeholders.
+    auto inner = alias_boundaries_.upper_bound(start);
+    if (*inner != end) {
+      if (!VirtualFree(alias_base + start, size,
+                       MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS)) {
+        XELOGE("Unable to merge alias placeholders {:08X}-{:08X}: {}",
+               guest_address, guest_address + size - 1, GetLastError());
+        return false;
+      }
+      alias_boundaries_.erase(inner, alias_boundaries_.lower_bound(end));
+    }
+    void* view = Placeholders().map_view_of_file3(
+        mapping_, GetCurrentProcess(), alias_base + start,
+        0x100000000ull + physical_address, size, MEM_REPLACE_PLACEHOLDER,
+        writable ? PAGE_READWRITE : PAGE_READONLY, nullptr, 0);
+    if (view != alias_base + start) {
+      XELOGE("Unable to map alias range {:08X}-{:08X} to physical {:08X}: {}",
+             guest_address, guest_address + size - 1, physical_address,
+             GetLastError());
+      return false;
+    }
+    return true;
+  }
+#endif
   void* view =
       xe::memory::MapFileView(mapping_, alias_base + guest_address, size,
                               writable ? xe::memory::PageAccess::kReadWrite
@@ -409,9 +569,19 @@ bool Memory::MapAliasRange(uint8_t* alias_base, uint32_t guest_address,
 
 void Memory::UnmapAliasRange(uint8_t* alias_base, uint32_t guest_address,
                              uint32_t size) {
-  if (alias_base) {
-    xe::memory::UnmapFileView(mapping_, alias_base + guest_address, size);
+  if (!alias_base) {
+    return;
   }
+#if XE_PLATFORM_WIN32
+  if (alias_page_granular_ && alias_base == alias_placeholder_base_) {
+    std::lock_guard<std::mutex> lock(alias_mutex_);
+    Placeholders().unmap_view_of_file2(GetCurrentProcess(),
+                                       alias_base + guest_address,
+                                       MEM_PRESERVE_PLACEHOLDER);
+    return;
+  }
+#endif
+  xe::memory::UnmapFileView(mapping_, alias_base + guest_address, size);
 }
 
 int Memory::MapViews(uint8_t* mapping_base) {

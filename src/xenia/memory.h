@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -455,6 +456,9 @@ class Memory {
                      uint32_t physical_address, bool writable = true);
   void UnmapAliasRange(uint8_t* alias_base, uint32_t guest_address,
                        uint32_t size);
+  // Whether MapAliasRange takes 4 KB ranges (Windows placeholders, when the
+  // host allows page-granular views) rather than 64 KB ones.
+  bool alias_page_granular() const { return alias_page_granular_; }
 
   // Where to read guest code from for translation: an alias space for code
   // in [low, high), normal memory elsewhere. Code in that range is only ever
@@ -679,6 +683,15 @@ class Memory {
       xe::memory::kFileMappingHandleInvalid;
   uint8_t* mapping_base_ = nullptr;
   uint8_t* code_alias_base_ = nullptr;
+  // Page-granular alias space (Windows): the space is one reservation of
+  // placeholders, split and merged as views come and go. The boundaries of
+  // its placeholders and views, as offsets.
+  bool alias_page_granular_ = false;
+  uint8_t* alias_placeholder_base_ = nullptr;
+  std::set<uint64_t> alias_boundaries_;
+  std::mutex alias_mutex_;
+  bool SplitAliasPlaceholderAt(uint64_t offset);
+  void ReleaseAliasPlaceholders();
   uint32_t code_alias_low_ = 0;
   uint32_t code_alias_high_ = 0;
   union {
