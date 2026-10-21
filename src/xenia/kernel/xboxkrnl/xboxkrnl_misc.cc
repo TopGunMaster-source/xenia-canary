@@ -1215,6 +1215,24 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
                 1, 0x02000000, file);
             fclose(file);
           }
+          // xefu's user-mode state (16 MB pages B6 and B7: physical
+          // 0x06000000) and xefu's own image and data (0x82000000+).
+          auto state_path = kernel_state()->emulator()->storage_root() /
+                            "xefu_user_state.bin";
+          if (FILE* file = xe::filesystem::OpenFile(state_path, "wb")) {
+            fwrite(
+                kernel_memory()->TranslatePhysical<const uint8_t*>(0x06000000u),
+                1, 0x02000000, file);
+            fclose(file);
+          }
+          auto image_path =
+              kernel_state()->emulator()->storage_root() / "xefu_image.bin";
+          if (FILE* file = xe::filesystem::OpenFile(image_path, "wb")) {
+            fwrite(
+                kernel_memory()->TranslateVirtual<const uint8_t*>(0x82000000u),
+                1, 0x00400000, file);
+            fclose(file);
+          }
         }
         for (uint32_t line = 0; line < 8; ++line) {
           std::string bytes;
