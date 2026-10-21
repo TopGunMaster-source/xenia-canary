@@ -81,15 +81,14 @@ dword_result_t XamContentGetDeviceName_entry(dword_t device_id,
   if (device_info == nullptr) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
-  auto name = std::u16string(device_info->name);
-  if (name_capacity < name.size() + 1) {
-    return X_ERROR_INSUFFICIENT_BUFFER;
-  }
-
   char16_t* name_buffer =
       kernel_memory()->TranslateVirtual<char16_t*>(name_buffer_ptr);
 
-  xe::string_util::copy_and_swap_truncating(name_buffer, name, name_capacity);
+  // xam truncates a name too long for the buffer and pads a short one.
+  const uint32_t capacity = name_capacity;
+  std::fill_n(name_buffer, capacity, u'\0');
+  xe::string_util::copy_and_swap_truncating(name_buffer, device_info->name,
+                                            capacity);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamContentGetDeviceName, kContent, kImplemented);
