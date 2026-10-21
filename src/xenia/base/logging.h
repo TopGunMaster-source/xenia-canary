@@ -61,6 +61,7 @@ class FileLogSink final : public LogSink {
  private:
   FILE* file_;
   bool owns_file_;
+  uint64_t bytes_written_ = 0;
 };
 
 class DebugPrintLogSink final : public LogSink {

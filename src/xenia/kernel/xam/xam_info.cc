@@ -575,10 +575,19 @@ void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
          mount_path ? mount_path.value() : "(null)",
          command_line ? command_line.value() : "(null)", uint32_t(flags),
          loader_data.launch_data.size());
-  if (!launch_path || launch_path.value().empty() ||
-      !cvars::relaunch_on_title_launch) {
+  if (!launch_path || launch_path.value().empty()) {
     XamLoaderLaunchTitle_entry(launch_path, flags);
     return;
+  }
+  if (!cvars::relaunch_on_title_launch) {
+    // Nothing more will happen in this process: stop rather than linger (a
+    // lingering process with debug logging fills the disk).
+    XELOGI(
+        "Not restarting to launch {} (relaunch_on_title_launch is off); "
+        "exiting",
+        xe::path_to_utf8(launch_path.value()));
+    xe::FlushLog();
+    std::quick_exit(0);
   }
   loader_data.launch_flags = flags;
   loader_data.launch_path = xe::path_to_utf8(launch_path.value());

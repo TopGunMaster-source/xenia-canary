@@ -50,6 +50,10 @@ DEFINE_path(log_file, "", "Logs are written to the given file", "Logging");
 DEFINE_bool(log_to_stdout, true, "Write log output to stdout", "Logging");
 DEFINE_bool(log_to_debugprint, false, "Dump the log to DebugPrint.", "Logging");
 #endif  // XE_PLATFORM_ANDROID
+DEFINE_uint32(log_file_max_mb, 2048,
+              "Stop writing the log file once it reaches this many MB (0 = no "
+              "limit), so a long run with verbose logging can't fill the disk.",
+              "Logging");
 DEFINE_bool(flush_log, true, "Flush log file after each log line batch.",
             "Logging");
 
@@ -93,8 +97,21 @@ FileLogSink::~FileLogSink() {
 }
 
 void FileLogSink::Write(const char* buf, size_t size) {
-  if (file_) {
-    fwrite(buf, 1, size, file_);
+  if (!file_) {
+    return;
+  }
+  uint64_t limit = uint64_t(cvars::log_file_max_mb) << 20;
+  if (limit && bytes_written_ >= limit) {
+    return;
+  }
+  fwrite(buf, 1, size, file_);
+  bytes_written_ += size;
+  if (limit && bytes_written_ >= limit) {
+    static const char kNotice[] =
+        "\n*** Log file size limit (log_file_max_mb) reached; no further "
+        "lines are written. ***\n";
+    fwrite(kNotice, 1, sizeof(kNotice) - 1, file_);
+    fflush(file_);
   }
 }
 
