@@ -1516,6 +1516,16 @@ dword_result_t KeSetTimerEx_entry(const ppc_context_t& ctx) {
       due = now + std::chrono::microseconds(delta / 10);
     }
   }
+  // Timers expire on the kernel's clock interrupt, every millisecond: a due
+  // time that has passed (xefu asks for 100 ns, to get the next tick) is the
+  // next tick. xefu's 1 ms Xbox clock depends on this.
+  {
+    using namespace std::chrono;
+    static const steady_clock::time_point epoch = steady_clock::now();
+    auto ticks = duration_cast<milliseconds>(due - epoch).count() + 1;
+    auto now_ticks = duration_cast<milliseconds>(now - epoch).count() + 1;
+    due = epoch + milliseconds(std::max(ticks, now_ticks));
+  }
   auto header = &kernel_memory()->TranslateVirtual<X_KTIMER*>(timer)->header;
   header->signal_state = 0;
   bool was_set;
