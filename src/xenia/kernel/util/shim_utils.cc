@@ -16,6 +16,7 @@ namespace shim {
 thread_local bool t_trace_exports = false;
 std::atomic<cpu::Export*> g_traced_export{nullptr};
 std::atomic<uint32_t> g_traced_export_returned{0};
+ThreadExportTrace g_thread_export_traces[kThreadExportTraceSize];
 
 thread_local StringBuffer string_buffer_;
 

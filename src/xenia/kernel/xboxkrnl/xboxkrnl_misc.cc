@@ -1246,6 +1246,31 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
             g_fault_logs.load(), g_timer_dpc_count.load(),
             g_interrupt_flags.load());
         fputs(line.c_str(), file);
+        // xefu's state block (user 0xB7000000, physical 0x07000000): the
+        // synchronous service request (+0x298 = -1 while waiting, +0x29C =
+        // done) and the asynchronous queue (written at +0x2A0, read at
+        // -0x3FBC).
+        auto state_block =
+            kernel_memory()->TranslatePhysical<const uint8_t*>(0x07000000u);
+        auto state_word = [&](int32_t offset) {
+          return xe::load_and_swap<uint32_t>(state_block + offset);
+        };
+        fputs(fmt::format("  service request {:08X} done {:08X}, queue write "
+                          "{:08X} read {:08X}\n",
+                          state_word(0x298), state_word(0x29C),
+                          state_word(0x2A0), state_word(-0x3FBC))
+                  .c_str(),
+              file);
+        for (const auto& trace : shim::g_thread_export_traces) {
+          cpu::Export* thread_export = trace.last_export.load();
+          if (thread_export) {
+            fputs(fmt::format("  thread {:X}: {} ({})\n",
+                              trace.thread_id.load(), thread_export->name,
+                              trace.returned.load() ? "returned" : "in it")
+                      .c_str(),
+                  file);
+          }
+        }
         fclose(file);
       }
       if (!pc) {

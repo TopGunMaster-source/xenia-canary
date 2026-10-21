@@ -388,13 +388,27 @@ namespace shim {
 extern thread_local bool t_trace_exports;
 extern std::atomic<cpu::Export*> g_traced_export;
 extern std::atomic<uint32_t> g_traced_export_returned;
-inline void TraceExportCall(cpu::Export* export_entry) {
+// The same for every guest thread, by guest thread ID (mod the table size).
+constexpr uint32_t kThreadExportTraceSize = 64;
+struct ThreadExportTrace {
+  std::atomic<cpu::Export*> last_export{nullptr};
+  std::atomic<uint32_t> returned{0};
+  std::atomic<uint32_t> thread_id{0};
+};
+extern ThreadExportTrace g_thread_export_traces[kThreadExportTraceSize];
+inline void TraceExportCall(cpu::Export* export_entry, uint32_t thread_id) {
+  auto& trace = g_thread_export_traces[thread_id % kThreadExportTraceSize];
+  trace.thread_id.store(thread_id, std::memory_order_relaxed);
+  trace.returned.store(0, std::memory_order_relaxed);
+  trace.last_export.store(export_entry, std::memory_order_relaxed);
   if (t_trace_exports) {
     g_traced_export_returned.store(0, std::memory_order_relaxed);
     g_traced_export.store(export_entry, std::memory_order_relaxed);
   }
 }
-inline void TraceExportReturn() {
+inline void TraceExportReturn(uint32_t thread_id) {
+  g_thread_export_traces[thread_id % kThreadExportTraceSize].returned.store(
+      1, std::memory_order_relaxed);
   if (t_trace_exports) {
     g_traced_export_returned.store(1, std::memory_order_relaxed);
   }
@@ -571,7 +585,7 @@ struct ExportRegistrerHelper {
         // The make_tuple order is undefined per the C++ standard and
         // cause inconsitencies between msvc and clang.
         std::tuple<Ps...> params = {Ps(init)...};
-        TraceExportCall(export_entry);
+        TraceExportCall(export_entry, ppc_context->thread_id);
         if (TAGS & xe::cpu::ExportTag::kLog &&
             (!(TAGS & xe::cpu::ExportTag::kHighFrequency) ||
              cvars::log_high_frequency_kernel_calls)) {
@@ -586,13 +600,13 @@ struct ExportRegistrerHelper {
         if constexpr (std::is_void<R>::value) {
           KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                            std::make_index_sequence<sizeof...(Ps)>());
-          TraceExportReturn();
+          TraceExportReturn(ppc_context->thread_id);
         } else {
           auto result =
               KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                                std::make_index_sequence<sizeof...(Ps)>());
           result.Store(ppc_context);
-          TraceExportReturn();
+          TraceExportReturn(ppc_context->thread_id);
           if (TAGS &
               (xe::cpu::ExportTag::kLog | xe::cpu::ExportTag::kLogResult)) {
             // TODO(benvanik): log result.
@@ -607,17 +621,17 @@ struct ExportRegistrerHelper {
             0,
         };
         std::tuple<Ps...> params = {Ps(init)...};
-        TraceExportCall(export_entry);
+        TraceExportCall(export_entry, ppc_context->thread_id);
         if constexpr (std::is_void<R>::value) {
           KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                            std::make_index_sequence<sizeof...(Ps)>());
-          TraceExportReturn();
+          TraceExportReturn(ppc_context->thread_id);
         } else {
           auto result =
               KernelTrampoline(fn, std::forward<std::tuple<Ps...>>(params),
                                std::make_index_sequence<sizeof...(Ps)>());
           result.Store(ppc_context);
-          TraceExportReturn();
+          TraceExportReturn(ppc_context->thread_id);
         }
       }
     };
