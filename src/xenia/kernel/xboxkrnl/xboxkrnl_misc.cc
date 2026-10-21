@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "xenia/base/exception_handler.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
 #include "xenia/base/platform.h"
@@ -29,6 +30,7 @@
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/cpu/ppc/ppc_frontend.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
@@ -1141,6 +1143,44 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
           regs += fmt::format(" r{}={:X}", n, uint32_t(pc->r[n]));
         }
         XELOGI("BACKCOMPAT   registers:{}", regs);
+        // The x86 stack (little-endian words), for the callers.
+        auto read_x86_word = [](uint32_t address, uint32_t* value) {
+          uint32_t v = 0;
+          for (uint32_t n = 0; n < 4; ++n) {
+            uint32_t physical;
+            if (!TranslateUserAddress(address + n, false, &physical)) {
+              return false;
+            }
+            v |= uint32_t(*kernel_memory()->TranslatePhysical<const uint8_t*>(
+                     physical))
+                 << (8 * n);
+          }
+          *value = v;
+          return true;
+        };
+        std::string stack;
+        uint32_t esp = uint32_t(pc->r[7]);
+        for (uint32_t n = 0; n < 48; ++n) {
+          uint32_t value;
+          stack += read_x86_word(esp + 4 * n, &value)
+                       ? fmt::format(" {:08X}", value)
+                       : std::string(" ????????");
+        }
+        XELOGI("BACKCOMPAT   x86 stack @{:08X}:{}", esp, stack);
+        // Once: the emulated Xbox's 64 MB of RAM (physical 0x10000000 on the
+        // 360), to study offline.
+        if (dumps == 1) {
+          auto path =
+              kernel_state()->emulator()->storage_root() / "xefu_xbox_ram.bin";
+          if (FILE* file = xe::filesystem::OpenFile(path, "wb")) {
+            fwrite(
+                kernel_memory()->TranslatePhysical<const uint8_t*>(0x10000000u),
+                1, 0x04000000, file);
+            fclose(file);
+            XELOGI("BACKCOMPAT   wrote the Xbox's RAM to {}",
+                   xe::path_to_utf8(path));
+          }
+        }
         for (uint32_t line = 0; line < 8; ++line) {
           std::string bytes;
           uint32_t start = (eip & ~0xFu) - 0x40 + line * 16;
