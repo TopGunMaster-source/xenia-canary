@@ -37,6 +37,18 @@ struct CreateOptions {
   static constexpr uint32_t FILE_RANDOM_ACCESS = 0x00000800;
 };
 
+// An object path as the kernel's file functions take it. \??\ names the
+// object manager's DOS devices directory (where D:, GAME: and the like
+// live), the same as a root directory handle of ObDosDevices; the VFS knows
+// those links without it, and '?' isn't otherwise valid in a path.
+static std::string TranslateObjectPath(const X_ANSI_STRING* object_name) {
+  std::string path = util::TranslateAnsiPath(kernel_memory(), object_name);
+  if (utf8::starts_with(path, "\\??\\")) {
+    path = path.substr(4);
+  }
+  return path;
+}
+
 dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
                                   pointer_t<X_OBJECT_ATTRIBUTES> object_attrs,
                                   pointer_t<X_IO_STATUS_BLOCK> io_status_block,
@@ -61,7 +73,7 @@ dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
   vfs::Entry* root_entry = nullptr;
 
   // Compute path, possibly attrs relative.
-  auto target_path = util::TranslateAnsiPath(kernel_memory(), object_name);
+  auto target_path = TranslateObjectPath(object_name);
 
   // Enforce that the path is ASCII.
   if (!IsValidPath(target_path, false)) {
@@ -485,7 +497,7 @@ dword_result_t NtQueryFullAttributesFile_entry(
     assert_always();
   }
 
-  auto target_path = util::TranslateAnsiPath(kernel_memory(), object_name);
+  auto target_path = TranslateObjectPath(object_name);
 
   // Enforce that the path is ASCII.
   if (!IsValidPath(target_path, false)) {
@@ -581,7 +593,7 @@ dword_result_t NtOpenSymbolicLinkObject_entry(
   auto object_name =
       kernel_memory()->TranslateVirtual<X_ANSI_STRING*>(object_attrs->name_ptr);
 
-  auto target_path = util::TranslateAnsiPath(kernel_memory(), object_name);
+  auto target_path = TranslateObjectPath(object_name);
 
   // Enforce that the path is ASCII.
   if (!IsValidPath(target_path, false)) {

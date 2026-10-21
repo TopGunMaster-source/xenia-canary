@@ -695,6 +695,10 @@ void EmulatorApp::EmulatorThread() {
         XELOGE("Unable to register compatibility path {}", mount);
       }
     }
+    // xefu links X: to the Compatibility folder and, to leave a title,
+    // launches X:\xbox.xex; a relaunched emulator has to know the link.
+    fs->RegisterSymbolicLink("X:",
+                             "\\Device\\Harddisk0\\Partition1\\Compatibility");
   }
 
   if (cvars::force_mount_devkit) {
