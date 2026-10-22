@@ -400,8 +400,9 @@ dword_result_t xeXamContentCreate(dword_t user_index, lpstring_t root_name,
     if (!result) {
       result = content_manager->CheckPackageName(xuid, content_data);
     }
-    // The root is mounted after the content is chosen so a create on a root in
-    // use fails with ERROR_DUP_NAME and an open with ERROR_ALREADY_EXISTS.
+    // The root is mounted after the content is chosen and made. A create on a
+    // root in use still makes the package and fails with ERROR_DUP_NAME, while
+    // an open fails with ERROR_ALREADY_EXISTS.
     const bool root_in_use =
         kernel_state()->file_system()->IsSymbolicLinkRegistered(root_name +
                                                                 ':');
@@ -465,9 +466,15 @@ dword_result_t xeXamContentCreate(dword_t user_index, lpstring_t root_name,
       }
     }
     if (root_in_use && disposition != kDispositionState::Unknown) {
-      result = disposition == kDispositionState::Create
-                   ? X_ERROR_DUP_NAME
-                   : X_ERROR_ALREADY_EXISTS;
+      if (disposition == kDispositionState::Create) {
+        if (!content_manager->ContentExists(xuid, content_data) &&
+            !content_manager->CreatePackage(xuid, content_data)) {
+          content_manager->WriteContentHeaderFile(xuid, content_data);
+        }
+        result = X_ERROR_DUP_NAME;
+      } else {
+        result = X_ERROR_ALREADY_EXISTS;
+      }
       disposition = kDispositionState::Unknown;
     }
 

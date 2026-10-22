@@ -261,6 +261,9 @@ class ContentManager {
                                  const uint64_t xuid, const uint32_t title_id,
                                  XContentType content_type,
                                  XCONTENT_AGGREGATE_DATA& data) const;
+  // Makes the package without mounting it.
+  X_RESULT CreatePackage(const uint64_t xuid,
+                         const XCONTENT_AGGREGATE_DATA& data);
   X_RESULT CreateContent(const std::string_view root_name, const uint64_t xuid,
                          const XCONTENT_AGGREGATE_DATA& data);
   // Empties the package but for its thumbnail.

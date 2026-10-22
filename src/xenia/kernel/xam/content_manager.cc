@@ -498,15 +498,9 @@ X_RESULT ContentManager::ReadContentHeaderFile(
   return X_STATUS_NO_SUCH_FILE;
 }
 
-X_RESULT ContentManager::CreateContent(const std::string_view root_name,
-                                       const uint64_t xuid,
+X_RESULT ContentManager::CreatePackage(const uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
   auto global_lock = global_critical_region_.Acquire();
-
-  if (open_packages_.count(string_key_insensitive(root_name))) {
-    // Already content open with this root name.
-    return X_ERROR_ALREADY_EXISTS;
-  }
 
   std::filesystem::path package_path;
   if (const X_RESULT result = ResolvePackagePath(xuid, data, package_path)) {
@@ -519,6 +513,22 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name,
 
   if (!std::filesystem::create_directories(package_path)) {
     return X_ERROR_ACCESS_DENIED;
+  }
+  return X_ERROR_SUCCESS;
+}
+
+X_RESULT ContentManager::CreateContent(const std::string_view root_name,
+                                       const uint64_t xuid,
+                                       const XCONTENT_AGGREGATE_DATA& data) {
+  auto global_lock = global_critical_region_.Acquire();
+
+  if (open_packages_.count(string_key_insensitive(root_name))) {
+    // Already content open with this root name.
+    return X_ERROR_ALREADY_EXISTS;
+  }
+
+  if (const X_RESULT result = CreatePackage(xuid, data)) {
+    return result;
   }
 
   auto package = ResolvePackage(root_name, xuid, data);
