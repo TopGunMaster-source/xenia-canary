@@ -263,6 +263,9 @@ class ContentManager {
                                  XCONTENT_AGGREGATE_DATA& data) const;
   X_RESULT CreateContent(const std::string_view root_name, const uint64_t xuid,
                          const XCONTENT_AGGREGATE_DATA& data);
+  // Empties the package but for its thumbnail.
+  X_RESULT TruncateContent(const uint64_t xuid,
+                           const XCONTENT_AGGREGATE_DATA& data);
   X_RESULT OpenContent(const std::string_view root_name, const uint64_t xuid,
                        const XCONTENT_AGGREGATE_DATA& data,
                        uint32_t& content_license,

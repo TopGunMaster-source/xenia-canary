@@ -663,6 +663,44 @@ X_RESULT ContentManager::SetContentThumbnail(
   return X_ERROR_SUCCESS;
 }
 
+X_RESULT ContentManager::TruncateContent(const uint64_t xuid,
+                                         const XCONTENT_AGGREGATE_DATA& data) {
+  auto global_lock = global_critical_region_.Acquire();
+
+  std::filesystem::path package_path;
+  if (const X_RESULT result = ResolvePackagePath(xuid, data, package_path)) {
+    return result;
+  }
+  if (IsContentOpen(package_path)) {
+    return X_ERROR_SHARING_VIOLATION;
+  }
+  std::error_code ec;
+  // A package stored as a container file becomes an empty directory.
+  if (!std::filesystem::is_directory(package_path, ec)) {
+    if (!std::filesystem::remove(package_path, ec) ||
+        !std::filesystem::create_directory(package_path, ec)) {
+      return X_ERROR_ACCESS_DENIED;
+    }
+    return X_ERROR_SUCCESS;
+  }
+  std::vector<std::filesystem::path> entries;
+  for (const auto& entry :
+       std::filesystem::directory_iterator(package_path, ec)) {
+    if (entry.path().filename() != vfs::kPackageThumbnailFileName) {
+      entries.push_back(entry.path());
+    }
+  }
+  if (ec) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+  for (const auto& entry : entries) {
+    if (std::filesystem::remove_all(entry, ec) == static_cast<uintmax_t>(-1)) {
+      return X_ERROR_ACCESS_DENIED;
+    }
+  }
+  return X_ERROR_SUCCESS;
+}
+
 X_RESULT ContentManager::DeleteContent(const uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
   auto global_lock = global_critical_region_.Acquire();

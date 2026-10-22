@@ -445,15 +445,17 @@ dword_result_t xeXamContentCreate(dword_t user_index, lpstring_t root_name,
           }
           break;
         case vfs::XContentFlag::kTruncateExisting:
-          // Fail if doesn't exist, if does exist delete and recreate.
+          // Fail if doesn't exist, if does exist empty and open it.
           if (!content_manager->ContentExists(xuid, content_data)) {
             result = X_ERROR_PATH_NOT_FOUND;
           } else if (root_in_use) {
             // It's opened before it's emptied.
             result = X_ERROR_ALREADY_EXISTS;
           } else {
-            content_manager->DeleteContent(xuid, content_data);
-            disposition = kDispositionState::Create;
+            result = content_manager->TruncateContent(xuid, content_data);
+            if (!result) {
+              disposition = kDispositionState::Open;
+            }
           }
           break;
         default:
