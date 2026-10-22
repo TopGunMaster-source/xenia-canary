@@ -41,6 +41,7 @@ ContentPackage::ContentPackage(KernelState* kernel_state,
                                const std::string_view root_path)
     : kernel_state_(kernel_state),
       root_name_(root_name),
+      package_path_(package_path),
       license_(cvars::license_mask) {
   device_path_ = fmt::format("\\Device\\Content\\{0}\\", ++content_device_id_);
   content_data_ = data;
@@ -666,14 +667,12 @@ X_RESULT ContentManager::DeleteContent(const uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
   auto global_lock = global_critical_region_.Acquire();
 
-  if (IsContentOpen(data)) {
-    // TODO(Gliniak): Get real error code for this case.
-    return X_ERROR_ACCESS_DENIED;
-  }
-
   std::filesystem::path package_path;
   if (const X_RESULT result = ResolvePackagePath(xuid, data, package_path)) {
     return result;
+  }
+  if (IsContentOpen(package_path)) {
+    return X_ERROR_SHARING_VIOLATION;
   }
   if (std::filesystem::remove_all(package_path) > 0) {
     return X_ERROR_SUCCESS;
@@ -691,12 +690,15 @@ std::filesystem::path ContentManager::ResolveGameUserContentPath(
          title_id;
 }
 
-bool ContentManager::IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const {
-  return std::ranges::any_of(
-      open_packages_,
-      [data](std::pair<string_key_insensitive, ContentPackage*> content) {
-        return data == content.second->GetPackageContentData();
-      });
+bool ContentManager::IsContentOpen(
+    const std::filesystem::path& package_path) const {
+  // A name in another case, with the shared bit or for another user can reach
+  // the same package so open ones are matched by their host files.
+  return std::ranges::any_of(open_packages_, [&](const auto& content) {
+    std::error_code ec;
+    return std::filesystem::equivalent(package_path,
+                                       content.second->package_path(), ec);
+  });
 }
 
 void ContentManager::CloseOpenedFilesFromContent(

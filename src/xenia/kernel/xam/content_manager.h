@@ -221,10 +221,13 @@ class ContentPackage {
   // Ends in a separator, so it prefixes only this package's entries.
   const std::string& device_path() const { return device_path_; }
 
+  const std::filesystem::path& package_path() const { return package_path_; }
+
  private:
   KernelState* kernel_state_;
   std::string root_name_;
   std::string device_path_;
+  std::filesystem::path package_path_;
   XCONTENT_AGGREGATE_DATA content_data_;
   uint32_t license_;
   bool mounted_ = false;
@@ -274,7 +277,7 @@ class ContentManager {
   X_RESULT DeleteContent(const uint64_t xuid,
                          const XCONTENT_AGGREGATE_DATA& data);
   std::filesystem::path ResolveGameUserContentPath(const uint64_t xuid);
-  bool IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const;
+  bool IsContentOpen(const std::filesystem::path& package_path) const;
   void CloseOpenedFilesFromContent(const ContentPackage& package);
 
   uint64_t GetContentTotalSpace() const;
