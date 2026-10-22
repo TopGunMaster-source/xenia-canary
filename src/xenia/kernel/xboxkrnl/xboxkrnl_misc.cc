@@ -1572,7 +1572,23 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
 // instruction fault a 360 would take, at the branch target.
 static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
   UserModeState* st = t_user_mode;
-  if (!st || !g_alias_base || pc->virtual_membase != g_alias_base) {
+  if (!st || !g_alias_base) {
+    return;
+  }
+  if (pc->virtual_membase != g_alias_base) {
+    // Kernel-mode code (xefu's handler, say) branching into the range Xenia
+    // reserves for user code: on a 360 that's ordinary kernel memory there.
+    static std::atomic<uint32_t> kernel_logs{0};
+    if (kernel_logs.fetch_add(1) < 20) {
+      XELOGW(
+          "BACKCOMPAT kernel-mode code resolving {:08X} in the user-code range "
+          "(lr {:08X} ctr {:08X} r1 {:08X} r3 {:08X} r4 {:08X} r5 {:08X} r31 "
+          "{:08X}; last handler entry iar {:08X})",
+          target, uint32_t(pc->lr), uint32_t(pc->ctr), uint32_t(pc->r[1]),
+          uint32_t(pc->r[3]), uint32_t(pc->r[4]), uint32_t(pc->r[5]),
+          uint32_t(pc->r[31]), st->next_iar);
+      FlushLog();
+    }
     return;
   }
   uint32_t page = target >> kUserPageShift;
