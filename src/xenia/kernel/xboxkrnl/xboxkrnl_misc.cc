@@ -1576,9 +1576,16 @@ static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
     return;
   }
   uint32_t page = target >> kUserPageShift;
+  // What the host actually has there (Xenia's own records can disagree with
+  // it, which is what this guards against).
   auto mapped = [&] {
-    return g_alias_entries[target >> 24] || g_alias_pages[page] ||
-           (g_alias_has_small[page] && g_alias_small[target >> 12]);
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery(g_alias_base + target, &info, sizeof(info))) {
+      return false;
+    }
+    return info.State == MEM_COMMIT &&
+           (info.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY)) != 0;
   };
   if (mapped()) {
     return;
@@ -1599,6 +1606,10 @@ static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
         target, uint32_t(pc->lr), uint32_t(pc->ctr), uint32_t(pc->r[2]),
         uint32_t(pc->r[11]), uint32_t(pc->r[12]), st->next_iar);
     DescribeUserMapping(target);
+    XELOGW(
+        "BACKCOMPAT   Xenia's records: 16 MB {:08X}, 64 KB {:08X}, 4 KB {:08X}",
+        g_alias_entries[target >> 24], g_alias_pages[page],
+        g_alias_has_small[page] ? g_alias_small[target >> 12] : 0);
   }
   st->fault.pending = true;
   st->fault.iar = target;

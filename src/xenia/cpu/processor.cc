@@ -262,7 +262,8 @@ uint32_t Processor::InvalidateFunctions(Module* module, uint32_t low,
 Function* Processor::ResolveFunction(uint32_t address) {
   // Emulated user-mode code (every path that runs it comes through here):
   // the kernel maps the page or raises the instruction fault first.
-  if (ppc::g_user_mode_fetch_hook && memory_->IsCodeAliasAddress(address)) {
+  if (ppc::g_user_mode_fetch_hook && memory_->IsCodeAliasAddress(address) &&
+      !entry_table_.Get(address)) {
     if (auto thread_state = ThreadState::Get()) {
       ppc::g_user_mode_fetch_hook(thread_state->context(), address);
     }
