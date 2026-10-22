@@ -596,6 +596,15 @@ void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
              0x04000000, file);
       fclose(file);
     }
+    // And the 64 MB below it, where xefu keeps its own I/O buffers and
+    // request descriptors (physical 0x0C000000-0x0FFFFFFF).
+    auto host_path =
+        kernel_state()->emulator()->storage_root() / "xefu_host_ram_exit.bin";
+    if (FILE* file = xe::filesystem::OpenFile(host_path, "wb")) {
+      fwrite(kernel_memory()->TranslatePhysical<const uint8_t*>(0x0C000000u), 1,
+             0x04000000, file);
+      fclose(file);
+    }
     // Let the logger catch up: with debug logging it can be seconds behind.
     xe::threading::Sleep(std::chrono::seconds(5));
     xe::FlushLog();

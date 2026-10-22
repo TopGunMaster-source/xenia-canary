@@ -143,8 +143,11 @@ dword_result_t NtReadFile_entry(dword_t file_handle, dword_t event_handle,
                                 lpvoid_t apc_routine_ptr, lpvoid_t apc_context,
                                 pointer_t<X_IO_STATUS_BLOCK> io_status_block,
                                 lpvoid_t buffer, dword_t buffer_length,
-                                lpqword_t byte_offset_ptr) {
+                                lpqword_t byte_offset_ptr,
+                                const ppc_context_t& context) {
   X_STATUS result = X_STATUS_SUCCESS;
+  // Who issued the read (for following titles' own I/O layers).
+  XELOGD("NtReadFile from lr={:08X}", static_cast<uint32_t>(context->lr));
 
   bool signal_event = false;
   bool pending = false;
