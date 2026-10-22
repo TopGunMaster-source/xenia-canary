@@ -619,7 +619,7 @@ X_RESULT ContentManager::GetContentThumbnail(
 
   // A deleted package leaves its header behind.
   if (!std::filesystem::exists(package_path)) {
-    return X_ERROR_FILE_NOT_FOUND;
+    return X_ERROR_PATH_NOT_FOUND;
   }
 
   // Upstream canary moves the thumbnail into the header file.
@@ -649,16 +649,17 @@ X_RESULT ContentManager::SetContentThumbnail(
   if (const X_RESULT result = ResolvePackagePath(xuid, data, package_path)) {
     return result;
   }
-  std::filesystem::create_directories(package_path);
-  if (std::filesystem::exists(package_path)) {
-    auto thumb_path = package_path / vfs::kPackageThumbnailFileName;
-    auto file = xe::filesystem::OpenFile(thumb_path, "wb");
-    fwrite(buffer.data(), 1, buffer.size(), file);
-    fclose(file);
-    return X_ERROR_SUCCESS;
-  } else {
-    return X_ERROR_FILE_NOT_FOUND;
+  if (!std::filesystem::exists(package_path)) {
+    return X_ERROR_PATH_NOT_FOUND;
   }
+  auto file = xe::filesystem::OpenFile(
+      package_path / vfs::kPackageThumbnailFileName, "wb");
+  if (!file) {
+    return X_ERROR_ACCESS_DENIED;
+  }
+  fwrite(buffer.data(), 1, buffer.size(), file);
+  fclose(file);
+  return X_ERROR_SUCCESS;
 }
 
 X_RESULT ContentManager::DeleteContent(const uint64_t xuid,
@@ -677,7 +678,7 @@ X_RESULT ContentManager::DeleteContent(const uint64_t xuid,
   if (std::filesystem::remove_all(package_path) > 0) {
     return X_ERROR_SUCCESS;
   } else {
-    return X_ERROR_FILE_NOT_FOUND;
+    return X_ERROR_PATH_NOT_FOUND;
   }
 }
 
