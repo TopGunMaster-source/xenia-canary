@@ -43,6 +43,13 @@ struct PPCBuiltins {
 using UserModeSyscallHook = bool (*)(PPCContext* ppc_context);
 extern UserModeSyscallHook g_user_mode_syscall_hook;
 
+// Called before user-mode code at `target` is resolved (translated): the
+// kernel maps the page or, if user mode can't execute there, raises the
+// instruction fault (and doesn't return). Set by the kernel for emulated user
+// mode.
+using UserModeFetchHook = void (*)(PPCContext* ppc_context, uint32_t target);
+extern UserModeFetchHook g_user_mode_fetch_hook;
+
 // Research: the r2 values (xefu's x86 EIP) seen when user-mode code is
 // resolved, as a ring (newest at index - 1); consecutive repeats skipped.
 constexpr uint32_t kUserTraceSize = 256;

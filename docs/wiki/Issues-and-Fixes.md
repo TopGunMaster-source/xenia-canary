@@ -136,10 +136,15 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Fix:** for `NtReadFile`, `NtReadFileScatter` and `NtWriteFile` with a completion APC, write the status block again just before the APC is delivered (`ee059c7`).
 * **First test (run 21) still failed.** A dump of XeFu's own memory (new, `xefu_host_ram_exit.bin`) showed the cache entry's length was `CE0008A0`, the descriptor's own address, so the APC still read a stale slot. The late write never happened: Xenia's APC delivery looked the APC up by the address of its *list entry* (8 bytes into the APC) instead of the APC itself. The same mistake meant kernel-routine APCs got the wrong pointer and finished APCs were freed at the wrong address. Fixed in `c3cea8c`. ✅ Confirmed in run 23: every section verifies, and the Xbox kernel starts the game.
 
-### 32. The game stuck on its first function call: endless faults on its stack 🧪
+### 32. The game stuck on its first function call: endless faults on its stack ✅
 * **Symptom:** run 23 got into Burnout 3's own code (x86 `001D5E82`, `0025C110`, …), then stopped at x86 `002647B0`, the `push ebp` of a function, with about 400 000 page faults a second on the game's stack (`D0029CD0`). XeFu's page table maps that page read/write; Xenia's view of it was missing.
 * **Cause:** two slips in how Xenia mirrors XeFu's 4 KB pages. If *any* of the 16 pages of a 64 KB block was unmapped (a stack's guard page, for example), Xenia gave up on the whole block. And when mapping the pages one by one, it stopped at the first page that was already right instead of going on to the rest. Each fault then went to XeFu, which saw the page mapped and retried, forever.
-* **Fix:** skip unmapped pages and keep going, in both places. Built, not yet tested.
+* **Fix:** skip unmapped pages and keep going, in both places (`66f3bb2`). Confirmed: the fault storm is gone and the game's start-up code runs on for about 15 seconds.
+
+### 33. Xenia crashed when XeFu jumped to an unmapped code address 🧪
+* **Symptom:** with #32 fixed, the game ran on, then Xenia itself crashed (an access violation inside its PowerPC translator; found with the crash dump and the build's symbols). XeFu had branched to user address `BCBCBCBC`, a page Xenia has no view for, and Xenia tried to read the code there to translate it.
+* **What a 360 does:** an instruction fetch from an unmapped page is an instruction storage fault, which goes to XeFu's handler like any other page fault. Xenia had no path for that: it only caught faults raised by already translated code.
+* **Fix:** before translating user code at a new address, Xenia now maps the page if XeFu's tables allow it, and otherwise raises the fault at the branch target, as a 360 would. It also logs the branch (link and count registers, x86 EIP), so if `BCBCBCBC` is a garbage pointer we'll see where it came from. Built, not yet tested.
 
 ---
 

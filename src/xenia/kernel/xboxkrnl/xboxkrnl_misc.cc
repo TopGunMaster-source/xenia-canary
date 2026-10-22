@@ -392,6 +392,7 @@ struct UserModeFault {
   uint32_t iar = 0;      // faulting instruction
   uint32_t address = 0;  // data address
   bool is_write = false;
+  bool is_fetch = false;  // instruction fetch (iar == address)
 };
 
 struct UserModeState {
@@ -1550,6 +1551,7 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
   st->fault.address = uint32_t(offset);
   st->fault.is_write = ex->access_violation_operation() ==
                        Exception::AccessViolationOperation::kWrite;
+  st->fault.is_fetch = false;
 
   const CONTEXT& c = st->restart;
   ex->set_resume_pc(c.Rip);
@@ -1563,6 +1565,46 @@ static bool UserModeFaultCallback(Exception* ex, void* data) {
     std::memcpy(&ex->ModifyXmmRegister(n), &xmms[n], sizeof(vec128_t));
   }
   return true;
+}
+
+// Before user code at `target` is translated (an indirect branch into a page
+// Xenia hasn't mapped): map it if xefu's tables allow, else raise the
+// instruction fault a 360 would take, at the branch target.
+static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
+  UserModeState* st = t_user_mode;
+  if (!st || !g_alias_base || pc->virtual_membase != g_alias_base) {
+    return;
+  }
+  uint32_t page = target >> kUserPageShift;
+  auto mapped = [&] {
+    return g_alias_entries[target >> 24] || g_alias_pages[page] ||
+           (g_alias_has_small[page] && g_alias_small[target >> 12]);
+  };
+  if (mapped()) {
+    return;
+  }
+  uint32_t physical;
+  if (TranslateUserAddress(target, false, &physical)) {
+    uint32_t mapped_count = 0, unmapped_count = 0;
+    SyncUserPage(page, &mapped_count, &unmapped_count);
+    if (mapped()) {
+      return;
+    }
+  }
+  static std::atomic<uint32_t> logs{0};
+  if (logs.fetch_add(1) < 50) {
+    XELOGW(
+        "BACKCOMPAT instruction fetch from unmapped user code {:08X} (lr "
+        "{:08X} ctr {:08X} x86 EIP {:08X})",
+        target, uint32_t(pc->lr), uint32_t(pc->ctr), uint32_t(pc->r[2]));
+    DescribeUserMapping(target);
+  }
+  st->fault.pending = true;
+  st->fault.iar = target;
+  st->fault.address = target;
+  st->fault.is_write = false;
+  st->fault.is_fetch = true;
+  RtlRestoreContext(&st->restart, nullptr);
 }
 #endif  // XE_USER_MODE_FAULTS
 
@@ -1773,6 +1815,9 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
     return X_STATUS_UNSUCCESSFUL;
   }
   cpu::ppc::g_user_mode_syscall_hook = UserModeSyscallHook;
+#if XE_USER_MODE_FAULTS
+  cpu::ppc::g_user_mode_fetch_hook = UserModeFetchHook;
+#endif
 
   auto thread = XThread::GetCurrentThread();
   auto thread_state = thread->thread_state();
@@ -1844,7 +1889,8 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
       // map it and retry, rather than emulating every access to it.
       bool retry = false;
       uint32_t physical = 0;
-      if (!gpu && kernel_memory()->alias_page_granular() &&
+      if (!gpu && !state->fault.is_fetch &&
+          kernel_memory()->alias_page_granular() &&
           !(state->fault.iar == state->remap_iar &&
             fault_address == state->remap_address) &&
           TranslateUserAddress(fault_address, state->fault.is_write,
@@ -1860,7 +1906,8 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
       } else {
         state->remap_iar = 0;
         state->remap_address = 0;
-        if (!gpu && EmulateUserLoadStore(pc, state->fault.iar)) {
+        if (!gpu && !state->fault.is_fetch &&
+            EmulateUserLoadStore(pc, state->fault.iar)) {
           state->next_iar = state->fault.iar + 4;
         } else {
           state->next_iar = DeliverUserModeFault(state, pc);
