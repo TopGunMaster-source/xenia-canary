@@ -38,6 +38,10 @@ namespace xam {
 // TODO: check if actual x360 kernel/xam has a value similar to this
 constexpr uint32_t kCurrentlyRunningTitleId = 0xFFFFFFFF;
 
+// This bit of a content file name's first byte marks content shared under XUID
+// 0, stored under the name without it.
+constexpr uint8_t kSharedContentFileNameBit = 0x80;
+
 struct XCONTENT_DATA {
   be<uint32_t> device_id;         // 0x0 sz:0x4
   be<XContentType> content_type;  // 0x4 sz:0x4

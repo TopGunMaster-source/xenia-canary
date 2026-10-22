@@ -154,7 +154,8 @@ static X_RESULT CheckFileName(const std::string_view name) {
     component_start = i + 1;
   }
   // A package is a file in FATX so a name with a separator in it names none.
-  // Neither does a name with a byte past ASCII.
+  // Only the first byte may be non-ASCII so a name with any other doesn't
+  // either.
   if (name.empty() || name.find('\\') != std::string_view::npos ||
       std::any_of(name.begin(), name.end(),
                   [](const char c) { return uint8_t(c) >= 0x80; })) {
@@ -166,7 +167,13 @@ static X_RESULT CheckFileName(const std::string_view name) {
 X_RESULT ContentManager::ResolvePackagePath(const uint64_t xuid,
                                             const XCONTENT_AGGREGATE_DATA& data,
                                             std::filesystem::path& path) {
-  const std::string file_name = xe::string_util::trim(data.file_name());
+  std::string file_name = data.file_name();
+  const bool shared =
+      !file_name.empty() && (uint8_t(file_name[0]) & kSharedContentFileNameBit);
+  if (shared) {
+    file_name[0] = char(uint8_t(file_name[0]) & ~kSharedContentFileNameBit);
+  }
+  file_name = xe::string_util::trim(file_name);
   if (const X_RESULT result = CheckFileName(file_name)) {
     return result;
   }
@@ -187,7 +194,7 @@ X_RESULT ContentManager::ResolvePackagePath(const uint64_t xuid,
 
     // All DLCs are stored in common directory, so we need to override xuid for
     // them and probably some other types.
-    if (data.content_type == XContentType::kMarketplaceContent) {
+    if (shared || data.content_type == XContentType::kMarketplaceContent) {
       used_xuid = 0;
     }
 
@@ -410,6 +417,9 @@ X_RESULT ContentManager::WriteContentHeaderFile(const uint64_t xuid,
   if (ResolvePackagePath(xuid, data, package_path)) {
     return X_STATUS_NO_SUCH_FILE;
   }
+  // The header names the package as it's stored.
+  data.file_name_raw[0] =
+      char(uint8_t(data.file_name_raw[0]) & ~kSharedContentFileNameBit);
   auto header_path = PackageHeaderPath(package_path);
   auto parent_path = header_path.parent_path();
 

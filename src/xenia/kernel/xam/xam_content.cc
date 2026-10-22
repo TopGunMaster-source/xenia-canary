@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -219,29 +220,34 @@ dword_result_t XamContentCreateEnumeratorInternal_entry(
       {};  // XCONTENT_DATA_INTERNAL
 
   if (!device_info || device_info->device_id == DummyDeviceId::HDD) {
-    std::vector<uint64_t> xuids_to_enumerate = {};
+    auto content_manager = kernel_state()->content_manager();
+    const auto type = static_cast<XContentType>(content_type.value());
     if (xuid) {
-      xuids_to_enumerate.push_back(xuid);
+      enumerated_content = content_manager->ListContent(
+          static_cast<uint32_t>(DummyDeviceId::HDD), xuid, title, type);
     }
 
     if (!xuid || !(content_flags & vfs::XContentFlag::kExcludeCommon)) {
-      xuids_to_enumerate.push_back(0);  // Common content
+      // A user gets common content under its file name with the shared bit
+      // set, unless one of the user's own has that name. DLC is common
+      // whatever its name so it keeps the name it's stored under.
+      const size_t own_count = enumerated_content.size();
+      for (auto& data : content_manager->ListContent(
+               static_cast<uint32_t>(DummyDeviceId::HDD), 0, title, type)) {
+        if (xuid && type != XContentType::kMarketplaceContent) {
+          if (std::any_of(enumerated_content.begin(),
+                          enumerated_content.begin() + own_count,
+                          [&](const XCONTENT_AGGREGATE_DATA& own) {
+                            return own.file_name() == data.file_name();
+                          })) {
+            continue;
+          }
+          data.file_name_raw[0] =
+              char(uint8_t(data.file_name_raw[0]) | kSharedContentFileNameBit);
+        }
+        enumerated_content.push_back(data);
+      }
     }
-
-    for (const auto& xuid : xuids_to_enumerate) {
-      auto user_enumerated_data =
-          kernel_state()->content_manager()->ListContent(
-              static_cast<uint32_t>(DummyDeviceId::HDD), xuid, title,
-              static_cast<XContentType>(content_type.value()));
-
-      enumerated_content.insert(enumerated_content.end(),
-                                user_enumerated_data.cbegin(),
-                                user_enumerated_data.cend());
-    }
-
-    // Remove duplicates
-    enumerated_content.erase(std::ranges::unique(enumerated_content).begin(),
-                             enumerated_content.end());
   }
 
   if (!device_info || device_info->device_id == DummyDeviceId::ODD) {
@@ -314,7 +320,7 @@ static bool ValidFileName(const XCONTENT_DATA& content_data) {
   if (!name[0]) {
     return false;
   }
-  for (size_t i = (uint8_t(name[0]) & 0x80) ? 1 : 0;
+  for (size_t i = (uint8_t(name[0]) & kSharedContentFileNameBit) ? 1 : 0;
        i < xe::countof(name) && name[i]; ++i) {
     if (uint8_t(name[i]) & 0x80) {
       return false;
@@ -590,8 +596,10 @@ dword_result_t XamContentGetCreator_entry(
         result = X_ERROR_PATH_NOT_FOUND;
       }
       if (!result) {
-        // User always creates saves.
-        if (content_data.content_type == XContentType::kSavedGame) {
+        // User always creates saves and shared content is XUID 0's.
+        if (content_data.content_type == XContentType::kSavedGame &&
+            !(uint8_t(content_data.file_name_raw[0]) &
+              kSharedContentFileNameBit)) {
           creator = xuid;
         }
         if (creator_xuid_ptr) {
