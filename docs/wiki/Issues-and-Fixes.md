@@ -144,7 +144,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 ### 33. Xenia crashed when XeFu jumped to an unmapped code address 🧪
 * **Symptom:** with #32 fixed, the game ran on, then Xenia itself crashed (an access violation inside its PowerPC translator; found with the crash dump and the build's symbols). XeFu had branched to user address `BCBCBCBC`, a page Xenia has no view for, and Xenia tried to read the code there to translate it.
 * **What a 360 does:** an instruction fetch from an unmapped page is an instruction storage fault, which goes to XeFu's handler like any other page fault. Xenia had no path for that: it only caught faults raised by already translated code.
-* **Fix:** before translating user code at a new address, Xenia now maps the page if XeFu's tables allow it, and otherwise raises the fault at the branch target, as a 360 would. It also logs the branch (link and count registers, x86 EIP), so if `BCBCBCBC` is a garbage pointer we'll see where it came from. Built, not yet tested.
+* **Fix:** before translating user code at a new address, Xenia now maps the page if XeFu's tables allow it, and otherwise raises the fault at the branch target, as a 360 would. It also logs the branch (link and count registers, x86 EIP). The first version hooked only indirect branches and missed the path used here; the check now sits where every user-code address is resolved (`processor.cc`), so if `BCBCBCBC` is a garbage pointer we'll see where it came from. Built, not yet tested.
 
 ---
 

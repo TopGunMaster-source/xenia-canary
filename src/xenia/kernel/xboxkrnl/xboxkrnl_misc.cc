@@ -1595,8 +1595,9 @@ static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
   if (logs.fetch_add(1) < 50) {
     XELOGW(
         "BACKCOMPAT instruction fetch from unmapped user code {:08X} (lr "
-        "{:08X} ctr {:08X} x86 EIP {:08X})",
-        target, uint32_t(pc->lr), uint32_t(pc->ctr), uint32_t(pc->r[2]));
+        "{:08X} ctr {:08X} x86 EIP {:08X} r11 {:08X} r12 {:08X} next {:08X})",
+        target, uint32_t(pc->lr), uint32_t(pc->ctr), uint32_t(pc->r[2]),
+        uint32_t(pc->r[11]), uint32_t(pc->r[12]), st->next_iar);
     DescribeUserMapping(target);
   }
   st->fault.pending = true;

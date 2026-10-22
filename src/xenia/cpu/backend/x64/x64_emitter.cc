@@ -693,12 +693,6 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
           reinterpret_cast<uintptr_t>(&stack_marker));
     }
   }
-  if (ppc::g_user_mode_fetch_hook &&
-      thread_state->memory()->IsCodeAliasAddress(
-          static_cast<uint32_t>(target_address))) {
-    ppc::g_user_mode_fetch_hook(guest_context,
-                                static_cast<uint32_t>(target_address));
-  }
   auto fn = thread_state->processor()->ResolveFunction(
       static_cast<uint32_t>(target_address));
   assert_not_null(fn);
