@@ -373,7 +373,7 @@
    "export": "XamContentGetThumbnail",
    "r3": "0000000000000003",
    "capture": {
-    "size": "00000000"
+    "size": "cdcdcdcd"
    },
    "args": [
     {
@@ -389,6 +389,138 @@
     {
      "pointer": "size",
      "offset": 544
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "missing",
+   "name": "thumbnail size overlapped",
+   "export": "XamContentGetThumbnail",
+   "r3": "00000000000003E5",
+   "completed": true,
+   "capture": {
+    "size": "cdcdcdcd",
+    "overlapped": "0000065b000000000000000000000000000000000000000080070003"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_missing'",
+     "offset": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "pointer": "size",
+     "offset": 552
+    },
+    {
+     "pointer": "overlapped",
+     "offset": 560
+    }
+   ]
+  },
+  {
+   "scenario": "missing",
+   "name": "set thumbnail",
+   "export": "XamContentSetThumbnail",
+   "r3": "0000000000000003",
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_missing'",
+     "offset": 0
+    },
+    {
+     "pointer": "image",
+     "offset": 592
+    },
+    {
+     "value": 70
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "missing",
+   "name": "set thumbnail overlapped",
+   "export": "XamContentSetThumbnail",
+   "r3": "00000000000003E5",
+   "completed": true,
+   "capture": {
+    "overlapped": "0000065b000000000000000000000000000000000000000080070003"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_missing'",
+     "offset": 0
+    },
+    {
+     "pointer": "image",
+     "offset": 664
+    },
+    {
+     "value": 70
+    },
+    {
+     "pointer": "overlapped",
+     "offset": 736
+    }
+   ]
+  },
+  {
+   "scenario": "missing",
+   "name": "thumbnail size after set",
+   "export": "XamContentGetThumbnail",
+   "r3": "0000000000000003",
+   "capture": {
+    "size": "cdcdcdcd"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_missing'",
+     "offset": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "pointer": "size",
+     "offset": 768
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "missing",
+   "name": "delete after set thumbnail",
+   "export": "XamContentDelete",
+   "r3": "0000000000000003",
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_missing'",
+     "offset": 0
     },
     {
      "value": 0
@@ -873,6 +1005,130 @@
   },
   {
    "scenario": "lifecycle",
+   "name": "thumbnail large buffer",
+   "export": "XamContentGetThumbnail",
+   "r3": "0000000000000000",
+   "capture": {
+    "size": "00000100",
+    "thumbnail": "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cff0000000040001f31d0d400000000049454e44ae426082cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 0
+    },
+    {
+     "pointer": "thumbnail",
+     "offset": 640
+    },
+    {
+     "pointer": "size",
+     "offset": 632
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "thumbnail size overlapped",
+   "export": "XamContentGetThumbnail",
+   "r3": "00000000000003E5",
+   "completed": true,
+   "capture": {
+    "size": "00000046",
+    "overlapped": "00000000000000000000000000000000000000000000000000000000"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "pointer": "size",
+     "offset": 904
+    },
+    {
+     "pointer": "overlapped",
+     "offset": 912
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "thumbnail short buffer overlapped",
+   "export": "XamContentGetThumbnail",
+   "r3": "00000000000003E5",
+   "completed": true,
+   "capture": {
+    "size": "00000008",
+    "thumbnail": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "overlapped": "0000065b00000000000000000000000000000000000000008007007a"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 0
+    },
+    {
+     "pointer": "thumbnail",
+     "offset": 952
+    },
+    {
+     "pointer": "size",
+     "offset": 944
+    },
+    {
+     "pointer": "overlapped",
+     "offset": 968
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "set thumbnail overlapped",
+   "export": "XamContentSetThumbnail",
+   "r3": "00000000000003E5",
+   "completed": true,
+   "capture": {
+    "overlapped": "00000000000000000000000000000000000000000000000000000000"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 0
+    },
+    {
+     "pointer": "image",
+     "offset": 1000
+    },
+    {
+     "value": 70
+    },
+    {
+     "pointer": "overlapped",
+     "offset": 1072
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
    "name": "truncate existing",
    "export": "XamContentCreateEx",
    "r3": "0000000000000000",
@@ -897,11 +1153,11 @@
     },
     {
      "pointer": "disposition",
-     "offset": 632
+     "offset": 1104
     },
     {
      "pointer": "license",
-     "offset": 640
+     "offset": 1112
     },
     {
      "value": 0
@@ -947,10 +1203,274 @@
     },
     {
      "pointer": "size",
-     "offset": 648
+     "offset": 1120
     },
     {
      "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "truncate with another display name",
+   "export": "XamContentCreateEx",
+   "r3": "0000000000000000",
+   "capture": {
+    "disposition": "00000002",
+    "license": "00000000"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "root xgtst",
+     "offset": 328
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 1128
+    },
+    {
+     "value": 5
+    },
+    {
+     "pointer": "disposition",
+     "offset": 1440
+    },
+    {
+     "pointer": "license",
+     "offset": 1448
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "close xgtst",
+   "export": "XamContentClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "pointer": "root xgtst",
+     "offset": 328
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after truncate create enumerator",
+   "export": "XamContentCreateEnumerator",
+   "r3": "0000000000000000",
+   "capture": {
+    "buffer size": "000004d0"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 4
+    },
+    {
+     "pointer": "buffer size",
+     "offset": 1456
+    },
+    {
+     "pointer": "handle",
+     "offset": 1464
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after truncate",
+   "export": "XamEnumerate",
+   "r3": "0000000000000000",
+   "capture": {
+    "items": "000000010000000100780061006d00670065006e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000078675f6c69666500000000000000000000000000000000000000000000000000000000000000000000000000cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "returned": "00000001"
+   },
+   "args": [
+    {
+     "variable": "enumerator"
+    },
+    {
+     "value": 0
+    },
+    {
+     "pointer": "items",
+     "offset": 1472
+    },
+    {
+     "value": 1232
+    },
+    {
+     "pointer": "returned",
+     "offset": 2704
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after truncate close",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "enumerator"
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "open with another display name",
+   "export": "XamContentCreateEx",
+   "r3": "0000000000000000",
+   "capture": {
+    "disposition": "00000002",
+    "license": "00000000"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "pointer": "root xgtst",
+     "offset": 328
+    },
+    {
+     "pointer": "cd 'xg_life'",
+     "offset": 2712
+    },
+    {
+     "value": 3
+    },
+    {
+     "pointer": "disposition",
+     "offset": 3024
+    },
+    {
+     "pointer": "license",
+     "offset": 3032
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "close xgtst",
+   "export": "XamContentClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "pointer": "root xgtst",
+     "offset": 328
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after open create enumerator",
+   "export": "XamContentCreateEnumerator",
+   "r3": "0000000000000000",
+   "capture": {
+    "buffer size": "000004d0"
+   },
+   "args": [
+    {
+     "value": 0
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 4
+    },
+    {
+     "pointer": "buffer size",
+     "offset": 3040
+    },
+    {
+     "pointer": "handle",
+     "offset": 3048
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after open",
+   "export": "XamEnumerate",
+   "r3": "0000000000000000",
+   "capture": {
+    "items": "000000010000000100780061006d00670065006e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000078675f6c69666500000000000000000000000000000000000000000000000000000000000000000000000000cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "returned": "00000001"
+   },
+   "args": [
+    {
+     "variable": "enumerator"
+    },
+    {
+     "value": 0
+    },
+    {
+     "pointer": "items",
+     "offset": 3056
+    },
+    {
+     "value": 1232
+    },
+    {
+     "pointer": "returned",
+     "offset": 4288
+    },
+    {
+     "value": 0
+    }
+   ]
+  },
+  {
+   "scenario": "lifecycle",
+   "name": "enumerate after open close",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "enumerator"
     }
    ]
   },
@@ -973,11 +1493,11 @@
     },
     {
      "pointer": "is creator",
-     "offset": 656
+     "offset": 4296
     },
     {
      "pointer": "creator xuid",
-     "offset": 664
+     "offset": 4304
     },
     {
      "value": 0
@@ -1005,15 +1525,15 @@
     },
     {
      "pointer": "is creator",
-     "offset": 672
+     "offset": 4312
     },
     {
      "pointer": "creator xuid",
-     "offset": 680
+     "offset": 4320
     },
     {
      "pointer": "overlapped",
-     "offset": 688
+     "offset": 4328
     }
    ]
   },
@@ -1045,11 +1565,11 @@
     },
     {
      "pointer": "disposition",
-     "offset": 720
+     "offset": 4360
     },
     {
      "pointer": "license",
-     "offset": 728
+     "offset": 4368
     },
     {
      "value": 0
@@ -1059,7 +1579,7 @@
     },
     {
      "pointer": "overlapped",
-     "offset": 736
+     "offset": 4376
     }
    ]
   },
@@ -1079,7 +1599,7 @@
     },
     {
      "pointer": "overlapped",
-     "offset": 768
+     "offset": 4408
     }
    ]
   },
@@ -1138,11 +1658,11 @@
     },
     {
      "pointer": "is creator",
-     "offset": 800
+     "offset": 4440
     },
     {
      "pointer": "creator xuid",
-     "offset": 808
+     "offset": 4448
     },
     {
      "value": 0
@@ -3300,7 +3820,7 @@
    "export": "XamContentGetThumbnail",
    "r3": "0000000000000525",
    "capture": {
-    "size": "00000000"
+    "size": "cdcdcdcd"
    },
    "args": [
     {

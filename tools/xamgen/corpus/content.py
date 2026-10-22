@@ -102,21 +102,30 @@ class Content:
                wait=ov, capture=[flag, xuid] + ([ov] if ov else []),
                name=name or 'creator')
 
-    def thumbnail(self, user, data, buffer_size=None, name=None):
+    def thumbnail(self, user, data, buffer_size=None, overlapped=False,
+                  name=None):
+        """Asks for the size alone when `buffer_size` is None, its sentinel
+        showing whether it was written."""
         s = self.s
-        size = s.alloc(4, 'size', struct.pack('>I', buffer_size or 0))
+        size = s.alloc(4, 'size', None if buffer_size is None else
+                       struct.pack('>I', buffer_size))
         capture = [size]
         buffer = 0
         if buffer_size is not None:
             buffer = s.alloc(max(buffer_size, 8) + 8, 'thumbnail')
             capture.append(buffer)
-        s.call('XamContentGetThumbnail', user, data, buffer, size, 0,
-               capture=capture, name=name or 'get thumbnail')
+        ov = self.overlapped() if overlapped else None
+        if ov:
+            capture.append(ov)
+        s.call('XamContentGetThumbnail', user, data, buffer, size, ov or 0,
+               wait=ov, capture=capture, name=name or 'get thumbnail')
 
-    def set_thumbnail(self, user, data, image, name=None):
+    def set_thumbnail(self, user, data, image, overlapped=False, name=None):
         s = self.s
         buffer = s.alloc(len(image), 'image', image)
-        s.call('XamContentSetThumbnail', user, data, buffer, len(image), 0,
+        ov = self.overlapped() if overlapped else None
+        s.call('XamContentSetThumbnail', user, data, buffer, len(image),
+               ov or 0, wait=ov, capture=[ov] if ov else [],
                name=name or 'set thumbnail')
 
     def enumerate(self, user, count=4, name='enumerate'):
@@ -160,6 +169,12 @@ def build(corpus):
     c.delete(0, missing, name='delete missing')
     c.delete(0, missing, overlapped=True, name='delete missing overlapped')
     c.thumbnail(0, missing, name='thumbnail size')
+    c.thumbnail(0, missing, overlapped=True, name='thumbnail size overlapped')
+    c.set_thumbnail(0, missing, PNG, name='set thumbnail')
+    c.set_thumbnail(0, missing, PNG, overlapped=True,
+                    name='set thumbnail overlapped')
+    c.thumbnail(0, missing, name='thumbnail size after set')
+    c.delete(0, missing, name='delete after set thumbnail')
 
     # One save from creation to deletion.
     c = scenario(corpus, 'lifecycle')
@@ -181,9 +196,24 @@ def build(corpus):
     c.thumbnail(0, save, name='thumbnail size')
     c.thumbnail(0, save, len(PNG), name='thumbnail')
     c.thumbnail(0, save, 8, name='thumbnail short buffer')
+    c.thumbnail(0, save, 0x100, name='thumbnail large buffer')
+    c.thumbnail(0, save, overlapped=True, name='thumbnail size overlapped')
+    c.thumbnail(0, save, 8, overlapped=True,
+                name='thumbnail short buffer overlapped')
+    c.set_thumbnail(0, save, PNG, overlapped=True,
+                    name='set thumbnail overlapped')
     c.create(0, ROOT, save, TRUNCATE_EXISTING, name='truncate existing')
     c.close(ROOT)
     c.thumbnail(0, save, name='thumbnail size after truncate')
+    # Whether a truncate or an open takes the display name it's given.
+    c.create(0, ROOT, c.data('xg_life', display='truncated'),
+             TRUNCATE_EXISTING, name='truncate with another display name')
+    c.close(ROOT)
+    c.enumerate(0, name='enumerate after truncate')
+    c.create(0, ROOT, c.data('xg_life', display='opened'), OPEN_EXISTING,
+             name='open with another display name')
+    c.close(ROOT)
+    c.enumerate(0, name='enumerate after open')
     c.creator(0, save, name='creator')
     c.creator(0, save, overlapped=True, name='creator overlapped')
     c.create(0, ROOT, save, OPEN_EXISTING, overlapped=True,
