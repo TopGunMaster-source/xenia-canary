@@ -646,20 +646,14 @@ dword_result_t XamContentGetThumbnail_entry(
   std::vector<uint8_t> buffer;
   auto result = kernel_state()->content_manager()->GetContentThumbnail(
       xuid, content_data, &buffer);
-
-  *buffer_size_ptr = uint32_t(buffer.size());
-
-  if (XSUCCEEDED(result)) {
-    // Write data, if we were given a pointer.
-    // This may have just been a size query.
-    if (buffer_ptr) {
-      if (buffer_size < buffer.size()) {
-        // Dest buffer too small.
-        result = X_ERROR_INSUFFICIENT_BUFFER;
-      } else {
-        // Copy data.
-        std::memcpy((uint8_t*)buffer_ptr, buffer.data(), buffer.size());
-      }
+  if (!result) {
+    if (!buffer_ptr) {
+      // Only a query for the size gets it back.
+      *buffer_size_ptr = uint32_t(buffer.size());
+    } else if (buffer_size < buffer.size()) {
+      result = X_ERROR_INSUFFICIENT_BUFFER;
+    } else {
+      std::memcpy((uint8_t*)buffer_ptr, buffer.data(), buffer.size());
     }
   }
 
