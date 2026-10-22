@@ -7,6 +7,8 @@
  ******************************************************************************
  */
 
+#include <csignal>
+#include <cstdio>
 #include <cstdlib>
 
 #include "xenia/base/console.h"
@@ -348,6 +350,41 @@ static void WriteCrashDump(_EXCEPTION_POINTERS* exception) {
   }
 }
 
+// A stack overflow may never reach the unhandled exception filter: catch it
+// first.
+static LONG CALLBACK StackOverflowDumpHandler(_EXCEPTION_POINTERS* exception) {
+  if (exception->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+    WriteCrashDump(exception);
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Something ending the process without an exception (exit, quick_exit,
+// abort): record who, in xenia_exit.txt beside the executable.
+static void WriteExitTrace(const char* how) {
+  void* frames[48];
+  USHORT count = CaptureStackBackTrace(1, 48, frames, nullptr);
+  wchar_t path[MAX_PATH];
+  DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  while (length && path[length - 1] != L'\\') {
+    --length;
+  }
+  path[length] = 0;
+  wcscat_s(path, L"xenia_exit.txt");
+  FILE* file = nullptr;
+  if (_wfopen_s(&file, path, L"w") || !file) {
+    return;
+  }
+  fprintf(file, "%s on thread %lu; exe base %p\n", how, GetCurrentThreadId(),
+          reinterpret_cast<void*>(g_xenia_exe_base));
+  for (USHORT i = 0; i < count; ++i) {
+    fprintf(file, "  %p (exe+%llx)\n", frames[i],
+            static_cast<unsigned long long>(
+                reinterpret_cast<uintptr_t>(frames[i]) - g_xenia_exe_base));
+  }
+  fclose(file);
+}
+
 LONG _UnhandledExceptionFilter(_EXCEPTION_POINTERS* ExceptionInfo) {
   WriteCrashDump(ExceptionInfo);
   HostExceptionReport report{ExceptionInfo};
@@ -376,6 +413,10 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev,
 
   int result;
   SetUnhandledExceptionFilter(_UnhandledExceptionFilter);
+  AddVectoredExceptionHandler(1, StackOverflowDumpHandler);
+  std::atexit([] { WriteExitTrace("exit"); });
+  std::at_quick_exit([] { WriteExitTrace("quick_exit"); });
+  signal(SIGABRT, [](int) { WriteExitTrace("abort"); });
   {
     xe::ui::Win32WindowedAppContext app_context(hinstance, show_cmd);
     // TODO(Triang3l): Initialize creates a window. Set DPI awareness via the
