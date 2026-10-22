@@ -140,6 +140,18 @@ int InstrEmit_branch(PPCHIRBuilder& f, const char* src, uint64_t cia,
     {
 #endif
       // Jump to pointer.
+      if (f.user_code() && !lk && !cond) {
+        // Xenia's own return address for code it runs from the host
+        // (Processor::Execute, 0xBCBCBCBC) lies in the user-code range, so a
+        // return to it from user-range code (which reaches here through tail
+        // jumps) must go back to the host, not be resolved as code there.
+        Label* not_sentinel = f.NewLabel();
+        f.BranchFalse(f.CompareEQ(f.Truncate(nia, INT32_TYPE),
+                                  f.LoadConstantUint32(0xBCBCBCBC)),
+                      not_sentinel);
+        f.Return();
+        f.MarkLabel(not_sentinel);
+      }
       bool likely_return = !lk && nia_is_lr;
       if (likely_return) {
         call_flags |= CALL_POSSIBLE_RETURN;

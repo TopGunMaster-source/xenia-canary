@@ -141,10 +141,10 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** two slips in how Xenia mirrors XeFu's 4 KB pages. If *any* of the 16 pages of a 64 KB block was unmapped (a stack's guard page, for example), Xenia gave up on the whole block. And when mapping the pages one by one, it stopped at the first page that was already right instead of going on to the rest. Each fault then went to XeFu, which saw the page mapped and retried, forever.
 * **Fix:** skip unmapped pages and keep going, in both places (`66f3bb2`). Confirmed: the fault storm is gone and the game's start-up code runs on for about 15 seconds.
 
-### 33. Xenia crashed when XeFu jumped to an unmapped code address 🧪
-* **Symptom:** with #32 fixed, the game ran on, then Xenia itself crashed (an access violation inside its PowerPC translator; found with the crash dump and the build's symbols). XeFu had branched to user address `BCBCBCBC`, a page Xenia has no view for, and Xenia tried to read the code there to translate it.
-* **What a 360 does:** an instruction fetch from an unmapped page is an instruction storage fault, which goes to XeFu's handler like any other page fault. Xenia had no path for that: it only caught faults raised by already translated code.
-* **Fix:** before translating user code at a new address, Xenia now maps the page if XeFu's tables allow it, and otherwise raises the fault at the branch target, as a 360 would. It also logs the branch (link and count registers, x86 EIP). The first version hooked only indirect branches and missed the path used here; the check now sits where every user-code address is resolved (`processor.cc`), so if `BCBCBCBC` is a garbage pointer we'll see where it came from. Built, not yet tested.
+### 33. Xenia crashed jumping to `BCBCBCBC` 🧪
+* **Symptom:** with #32 fixed, the game's start-up ran on, then Xenia itself crashed (an access violation inside its PowerPC translator, found with the crash dump and the build's symbols): something branched to address `BCBCBCBC`, and Xenia tried to translate code there.
+* **Cause:** `0xBCBCBCBC` is Xenia's own made-up return address for code it calls from the host (`Processor::Execute`). It happens to fall in the range Xenia reserves for XeFu's user-mode code (0xB0000000-0xBFFFFFFF), and code there is translated with every call turned into a jump (#10). So when XeFu's handler, called from the host, jumped into code in that range and that code returned, the return went to `BCBCBCBC` as if it were code, instead of back to Xenia.
+* **Fix:** in user-range code, a return to Xenia's sentinel address now goes back to the host. Along the way: Xenia now raises an instruction fault, as a 360 does, when user code branches to a page that isn't mapped (`5ab2107`, `6fa126e`, `f207622`). Built, not yet tested.
 
 ---
 
