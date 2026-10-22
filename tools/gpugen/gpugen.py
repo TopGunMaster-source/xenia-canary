@@ -303,6 +303,34 @@ def export_copy(register):
                      src2=xenos.r(register))
 
 
+def export_vector(op, *sources):
+    """Vector `op` on `sources` as the exported element; a one-source op
+    reads it twice."""
+    return [xenos.alu(vector_op=op, vector_dest=xenos.EXPORT_DATA0,
+                      vector_mask=0xF, export=True, src1=sources[0],
+                      src2=sources[1] if len(sources) > 1 else sources[0],
+                      src3=sources[2] if len(sources) > 2 else None)]
+
+
+def export_scalar_lanes(op, operands):
+    """Lane i of the exported element = scalar `op` on operands(i): a source
+    for src3, or the alu() keywords."""
+    lanes = []
+    for i in range(4):
+        keywords = operands(i)
+        if not isinstance(keywords, dict):
+            keywords = {'src3': keywords}
+        lanes.append(xenos.alu(vector_dest=xenos.EXPORT_DATA0, export=True,
+                               scalar_op=op, scalar_mask=1 << i, **keywords))
+    return lanes
+
+
+def lane_operands(register):
+    """export_scalar_lanes operands of a one-operand op: lane i of
+    r`register` in src3's W slot, the one such ops read."""
+    return lambda i: xenos.r(register, 'xxx' + 'xyzw'[i])
+
+
 def emit_exports(s, exports, index, serialize):
     """The export clauses of `exports` (see memexport_shader) with element
     `index` (a source) * len(exports) + i, then the two eA-only exports."""
@@ -404,6 +432,45 @@ def trivial_pixel_shader():
                        export=True, src1=xenos.r(0), src2=xenos.r(0))],
             end=True)
     return s
+
+
+# Textures.
+
+SWIZZLE_XYZW = 0x688  # texture fetch constant swizzle: each from itself
+DIMENSION_2D = 1 << 9  # in dword 5
+
+
+def texture_constant(fmt, width, height=1, sign=0, num_format=0,
+                     endian=pm4.ENDIAN_8IN32, filters=(0, 0, 0), clamp=2,
+                     border_color=0, swizzle=SWIZZLE_XYZW, exp_adjust=0,
+                     pitch=None):
+    """A 2D texture fetch constant (xenos.h xe_gpu_texture_fetch_t) for a
+    linear texture, the base address left to the test's texture: `sign` for
+    every component, `filters` (mag, min, mip), `clamp` one ClampMode or
+    (x, y, z), `pitch` in texels, by default `width` rounded up to 32."""
+    clamp = clamp if isinstance(clamp, tuple) else (clamp,) * 3
+    pitch = (pitch or max(width, 32) + 31) // 32
+    return [2 | ((sign * 0x55) << 2) | (clamp[0] << 10) | (clamp[1] << 13) |
+            (clamp[2] << 16) | (pitch << 22),
+            fmt | (endian << 6),
+            (width - 1) | ((height - 1) << 13),
+            num_format | (swizzle << 1) | ((exp_adjust & 0x3F) << 13) |
+            (filters[0] << 19) | (filters[1] << 21) | (filters[2] << 23),
+            0,
+            border_color | DIMENSION_2D]
+
+
+def texture_words(*rows, swap=False):
+    """A linear texture's words from rows of bytes, each padded to the 256
+    bytes a row takes. With `swap` the rows hold texels in the byte order an
+    8in32 fetch reads them, so each dword is stored reversed."""
+    data = b''
+    for row in rows:
+        if swap:
+            row += bytes(-len(row) % 4)
+            row = b''.join(row[i:i + 4][::-1] for i in range(0, len(row), 4))
+        data += row + bytes(-len(row) % 256)
+    return list(struct.unpack(f'>{len(data) // 4}I', data))
 
 
 def stream_constant(offset, count, endian=2, color_format=38, num_format=7):

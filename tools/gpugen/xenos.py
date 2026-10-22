@@ -34,22 +34,70 @@ VF_32_32_FLOAT = 37
 VF_32_32_32_32_FLOAT = 38
 VF_32_32_32_FLOAT = 57
 
-# Vector ALU opcodes.
+# Vector ALU opcodes (ucode.h AluVectorOpcode).
 V_ADD = 0
 V_MUL = 1
 V_MAX = 2
 V_MIN = 3
+V_SEQ = 4
+V_SGT = 5
+V_SGE = 6
+V_SNE = 7
+V_FRC = 8
+V_TRUNC = 9
+V_FLOOR = 10
 V_MAD = 11
+V_CNDEQ = 12
+V_CNDGE = 13
+V_CNDGT = 14
 V_DP4 = 15
 V_DP3 = 16
+V_DP2ADD = 17
+V_CUBE = 18
+V_MAX4 = 19
+V_DST = 28
+V_MAXA = 29
 
-# Scalar ALU opcodes.
+# Scalar ALU opcodes (ucode.h AluScalarOpcode).
 S_ADDS = 0
+S_ADDS_PREV = 1
 S_MULS = 2
+S_MULS_PREV = 3
+S_MULS_PREV2 = 4
 S_MAXS = 5
+S_MINS = 6
+S_SEQS = 7
+S_SGTS = 8
+S_SGES = 9
+S_SNES = 10
+S_FRCS = 11
+S_TRUNCS = 12
+S_FLOORS = 13
+S_EXP = 14
+S_LOGC = 15
+S_LOG = 16
+S_RCPC = 17
+S_RCPF = 18
 S_RCP = 19
+S_RSQC = 20
+S_RSQF = 21
 S_RSQ = 22
+S_MAXAS = 23
+S_MAXASF = 24
+S_SUBS = 25
+S_SUBS_PREV = 26
+S_SETP_EQ = 27
+S_SETP_NE = 28
+S_SETP_GT = 29
+S_SETP_GE = 30
+S_SETP_INV = 31
+S_SETP_POP = 32
+S_SETP_CLR = 33
+S_SETP_RSTR = 34
+S_SQRT = 40
 S_MULSC0 = 42
+S_SIN = 48
+S_COS = 49
 S_RETAIN_PREV = 50
 
 # Export registers.
@@ -98,14 +146,16 @@ class Instruction:
 
 def vfetch(dst, src, src_component, const_index, const_sel, fmt, stride,
            offset=0, dst_swizzle='xyzw', signed=True, normalized=False,
-           rf_mode=0, exp_adjust=0, mini=False, prefetch=None):
+           rf_mode=0, exp_adjust=0, mini=False, prefetch=None,
+           index_rounded=False):
     """vfetch_full (or mini) of `fmt` into r`dst`, indexed by r`src`'s
     `src_component`, from vertex fetch constant (const_index, const_sel),
     `stride` and `offset` in dwords. `signed`, `normalized` and `rf_mode`
     (signed repeating fraction: 0 clamps to -1, 1 has no zero) are the
     format_comp_all, num_format_all (0 = normalized) and signed_rf_mode_all
     bits; the defaults are Direct3D's for float data. Full fetches default to
-    the prefetch count Direct3D shaders use."""
+    the prefetch count Direct3D shaders use. `index_rounded` rounds the index
+    instead of truncating it."""
     if prefetch is None:
         prefetch = 1 if mini else 8
     w0 = (FETCH_VERTEX | (src << 5) | (dst << 12) | (1 << 19) |
@@ -115,6 +165,7 @@ def vfetch(dst, src, src_component, const_index, const_sel, fmt, stride,
           (int(signed) << 12) |
           ((0 if normalized else 1) << 13) |
           (rf_mode << 14) |
+          (int(index_rounded) << 15) |
           (fmt << 16) |
           ((exp_adjust & 0x3F) << 24) |
           ((1 if mini else 0) << 30))

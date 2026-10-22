@@ -46,3 +46,12 @@ the console needs that Xenia doesn't:
 Suites:
 
 - `cp`, `smoke`: bring-up checks.
+- `alu`, `specials`, `ops2`, `dot`, `dotprobe`, `transcendental`: shader ALU
+  results, specials and rounding. `a0`: the address register. `sweep`: every
+  mantissa of one op over a binade, or sin/cos over a linear range, chosen
+  with `GPUGEN_SWEEP` (`GPUGEN_VERTICES` shortens it); its results are raw
+  `.bin` files.
+- `vfetch`, `edges`, `mexport`: vertex fetch conversions and indexing, memory
+  export formats and addressing.
+- `tfetch`, `tfetch_formats`, `tfilter`, `tfilter_probes`: texture fetch
+  conversions, block formats, endianness, filtering and addressing.
