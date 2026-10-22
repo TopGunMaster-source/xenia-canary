@@ -17,6 +17,7 @@
 #include "xenia/cpu/ppc/ppc_opcode_info.h"
 #include "xenia/cpu/ppc/ppc_translator.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/cpu/thread_state.h"
 
 namespace xe {
 namespace cpu {
@@ -132,6 +133,24 @@ bool PPCFrontend::DeclareFunction(GuestFunction* function) {
 
 bool PPCFrontend::DefineFunction(GuestFunction* function,
                                  uint32_t debug_info_flags) {
+  // Research: who asks for code in an emulated user mode's code range.
+  if (memory()->IsCodeAliasAddress(function->address())) {
+    static std::atomic<uint32_t> logs{0};
+    if (logs.fetch_add(1) < 3000 &&
+        (function->address() & 0xFFFF0000u) == 0xBCBC0000u) {
+      auto thread_state = ThreadState::Get();
+      auto ctx = thread_state ? thread_state->context() : nullptr;
+      XELOGW(
+          "BACKCOMPAT defining {:08X} (lr {:08X} ctr {:08X} r1 {:08X} r2 "
+          "{:08X} r3 {:08X} r31 {:08X} membase {})",
+          function->address(), ctx ? uint32_t(ctx->lr) : 0,
+          ctx ? uint32_t(ctx->ctr) : 0, ctx ? uint32_t(ctx->r[1]) : 0,
+          ctx ? uint32_t(ctx->r[2]) : 0, ctx ? uint32_t(ctx->r[3]) : 0,
+          ctx ? uint32_t(ctx->r[31]) : 0,
+          ctx ? static_cast<const void*>(ctx->virtual_membase) : nullptr);
+      xe::FlushLog();
+    }
+  }
   auto translator = translator_pool_.Allocate(this);
   bool result = translator->Translate(function, debug_info_flags);
   translator->Reset();
