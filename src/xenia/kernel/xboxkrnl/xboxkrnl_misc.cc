@@ -548,7 +548,9 @@ static void SyncUserPage(uint32_t page, uint32_t* mapped_count,
             entry ? PageMappingFromEntry(entry, entry & 0x1FFFF000u) : 0;
         want_small[k] = mapping;
         if (!mapping) {
-          return;
+          // Not mapped (a guard page below a stack, say): the others still
+          // are, just not as one 64 KB view.
+          continue;
         }
         ++present;
         uint32_t page_base = (entry & 0x1FFFF000u) - (k << 12);
@@ -564,8 +566,8 @@ static void SyncUserPage(uint32_t page, uint32_t* mapped_count,
         }
         access = std::max(access, mapping & 3);
       }
-      bool whole = access && consistent && !(base & 0xFFFF);
-      if (granular && access && !(whole && present == 16 && same_access)) {
+      bool whole = access && consistent && present == 16 && !(base & 0xFFFF);
+      if (granular && access && !(whole && same_access)) {
         use_small = true;
       } else if (whole) {
         want = base | access;
@@ -590,7 +592,7 @@ static void SyncUserPage(uint32_t page, uint32_t* mapped_count,
       uint32_t sub_page = (page << 4) | k;
       uint32_t have_small = g_alias_small[sub_page];
       if (want_small[k] == have_small) {
-        return;
+        continue;
       }
       uint32_t small_address = address + (k << 12);
       if (have_small) {

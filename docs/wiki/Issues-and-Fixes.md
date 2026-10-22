@@ -130,11 +130,16 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** XeFu's copy routine (hypercall `060E`) stops early when CR bit 4 says an interrupt is pending, expecting to resume after the interrupt. If no interrupt is actually deliverable, XeFu's dispatcher continues past the copy. Xenia set that bit from another thread, so the bit could outlive the interrupt and the copy was silently cut short.
 * **Fix:** set the bit only while an interrupt is pending *and* enabled, and take it back if that changed meanwhile. `40af7de`. Confirmed: `XONLINE` now passes.
 
-### 31. The end of section `XNET` came from the wrong place (0xC0000190) 🧪
+### 31. The end of section `XNET` came from the wrong place (0xC0000190) ✅
 * **Symptom:** `XNET` failed its SHA-1 check. Comparing RAM with the XBE showed everything right except the last 0x10E8 bytes, which held data from a different part of the file (from the next read-ahead buffer).
 * **Cause:** XeFu's I/O thread reads ahead asynchronously. Its completion routine (an APC) reads the byte count from the read's `IO_STATUS_BLOCK`, which lives on a stack frame that has already returned. On the 360 that works, because the kernel writes the status block during completion, in the same thread, right before the APC runs. Xenia wrote it when the read was issued, so by the time the APC ran, the stack had been reused and XeFu recorded a garbage length for that buffer.
 * **Fix:** for `NtReadFile`, `NtReadFileScatter` and `NtWriteFile` with a completion APC, write the status block again just before the APC is delivered (`ee059c7`).
-* **First test (run 21) still failed.** A dump of XeFu's own memory (new, `xefu_host_ram_exit.bin`) showed the cache entry's length was `CE0008A0`, the descriptor's own address, so the APC still read a stale slot. The late write never happened: Xenia's APC delivery looked the APC up by the address of its *list entry* (8 bytes into the APC) instead of the APC itself. The same mistake meant kernel-routine APCs got the wrong pointer and finished APCs were freed at the wrong address. Fixed in `c3cea8c`. 🧪
+* **First test (run 21) still failed.** A dump of XeFu's own memory (new, `xefu_host_ram_exit.bin`) showed the cache entry's length was `CE0008A0`, the descriptor's own address, so the APC still read a stale slot. The late write never happened: Xenia's APC delivery looked the APC up by the address of its *list entry* (8 bytes into the APC) instead of the APC itself. The same mistake meant kernel-routine APCs got the wrong pointer and finished APCs were freed at the wrong address. Fixed in `c3cea8c`. ✅ Confirmed in run 23: every section verifies, and the Xbox kernel starts the game.
+
+### 32. The game stuck on its first function call: endless faults on its stack 🧪
+* **Symptom:** run 23 got into Burnout 3's own code (x86 `001D5E82`, `0025C110`, …), then stopped at x86 `002647B0`, the `push ebp` of a function, with about 400 000 page faults a second on the game's stack (`D0029CD0`). XeFu's page table maps that page read/write; Xenia's view of it was missing.
+* **Cause:** two slips in how Xenia mirrors XeFu's 4 KB pages. If *any* of the 16 pages of a 64 KB block was unmapped (a stack's guard page, for example), Xenia gave up on the whole block. And when mapping the pages one by one, it stopped at the first page that was already right instead of going on to the rest. Each fault then went to XeFu, which saw the page mapped and retried, forever.
+* **Fix:** skip unmapped pages and keep going, in both places. Built, not yet tested.
 
 ---
 
