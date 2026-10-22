@@ -1447,10 +1447,13 @@ X_STATUS xeProcessUserApcs(PPCContext* ctx) {
   ctx->r[1] = old_stack_pointer - 32;
 
   while (!user_apc_queue.empty(ctx)) {
-    uint32_t apc_ptr = user_apc_queue.flink_ptr;
+    // The queue links the APCs' list entries; the APC itself (what kernel
+    // routines get, what was allocated) starts before its entry.
+    uint32_t apc_entry_ptr = user_apc_queue.flink_ptr;
+    uint32_t apc_ptr = apc_entry_ptr - 8;  // offset of XAPC::list_entry
 
     XAPC* apc = user_apc_queue.ListEntryObject(
-        ctx->TranslateVirtual<X_LIST_ENTRY*>(apc_ptr));
+        ctx->TranslateVirtual<X_LIST_ENTRY*>(apc_entry_ptr));
 
     uint8_t* scratch_ptr = ctx->TranslateVirtual(scratch_address);
     xe::store_and_swap<uint32_t>(scratch_ptr + 0, apc->normal_routine);
@@ -1463,11 +1466,7 @@ X_STATUS xeProcessUserApcs(PPCContext* ctx) {
     xeKeKfReleaseSpinLock(ctx, &current_thread->apc_lock, unlocked_irql);
     alert_status = X_STATUS_USER_APC;
     PendingApcIoStatus io_status;
-    if (TakeApcIoStatus(apc_ptr, &io_status)) {
-      auto iosb = ctx->TranslateVirtual<X_IO_STATUS_BLOCK*>(io_status.iosb_ptr);
-      iosb->status = io_status.status;
-      iosb->information = io_status.information;
-    }
+    bool has_io_status = TakeApcIoStatus(apc_ptr, &io_status);
     if (apc->kernel_routine != XAPC::kDummyKernelRoutine) {
       uint64_t kernel_args[] = {
           apc_ptr,
@@ -1486,6 +1485,14 @@ X_STATUS xeProcessUserApcs(PPCContext* ctx) {
     uint32_t normal_context = xe::load_and_swap<uint32_t>(scratch_ptr + 4);
     uint32_t arg1 = xe::load_and_swap<uint32_t>(scratch_ptr + 8);
     uint32_t arg2 = xe::load_and_swap<uint32_t>(scratch_ptr + 12);
+
+    if (has_io_status) {
+      // As late as possible: the status block may live in a dead stack frame
+      // (including the scratch area above).
+      auto iosb = ctx->TranslateVirtual<X_IO_STATUS_BLOCK*>(io_status.iosb_ptr);
+      iosb->status = io_status.status;
+      iosb->information = io_status.information;
+    }
 
     if (normal_routine) {
       uint64_t normal_args[] = {normal_context, arg1, arg2};
