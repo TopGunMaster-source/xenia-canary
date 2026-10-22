@@ -145,6 +145,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** test processes that had finished (XeFu exited) stayed open, kept logging at debug level for hours, and reached up to 31 GB per run.
 * **Fix:** the logs were cleared; the log file now stops at 2 GB (`log_file_max_mb`), and with relaunch off Xenia exits when the test ends. `6bf7a85`
 
-### 30. Silent crash while checking the game's code section 🔍 investigating
-* **Symptom:** with build `6bf7a85`, Xenia closes by itself about 4 seconds in, while the Xbox kernel is hashing `.text` (the first section). No error message and no crash line in the log. It happened twice in a row. The previous build got through `.text` fine.
-* **Next step:** Xenia now writes a crash dump (`xenia_crash.dmp` beside the exe) on an unhandled exception (`a46c86f`), so the next run should show where it crashes.
+### 30. "Silent crash" while checking the game's code (not a crash) ✅
+* **Symptom:** with build `6bf7a85`, Xenia closed by itself about 4 seconds in, with no error message. The log stopped in the middle of the `.text` section check.
+* **What it really was:** the new exit-when-done behaviour (#29). XeFu gave up and asked to launch `X:\xbox.xex`, so Xenia exited, but it exited before the debug log had caught up, so the log's last seconds (including why the Xbox gave up) were lost. Found with a new exit trace (`xenia_exit.txt`), which showed `quick_exit` called from `XamLoaderLaunchTitleEx`. Xenia also now writes a crash dump (`xenia_crash.dmp`) on a real crash (`a46c86f`, `a80e387`).
+* **Fix:** before exiting, wait for the log to catch up and save the Xbox's RAM (`xefu_xbox_ram_exit.bin`) for offline checks.

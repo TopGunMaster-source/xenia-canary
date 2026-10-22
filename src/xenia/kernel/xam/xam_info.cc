@@ -9,6 +9,7 @@
 
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/string_util.h"
@@ -586,6 +587,17 @@ void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
         "Not restarting to launch {} (relaunch_on_title_launch is off); "
         "exiting",
         xe::path_to_utf8(launch_path.value()));
+    // For the backward-compatibility research: the original Xbox's RAM
+    // (physical 0x10000000, 64 MB) as xefu left it.
+    auto ram_path =
+        kernel_state()->emulator()->storage_root() / "xefu_xbox_ram_exit.bin";
+    if (FILE* file = xe::filesystem::OpenFile(ram_path, "wb")) {
+      fwrite(kernel_memory()->TranslatePhysical<const uint8_t*>(0x10000000u), 1,
+             0x04000000, file);
+      fclose(file);
+    }
+    // Let the logger catch up: with debug logging it can be seconds behind.
+    xe::threading::Sleep(std::chrono::seconds(5));
     xe::FlushLog();
     std::quick_exit(0);
   }
