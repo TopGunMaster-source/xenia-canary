@@ -343,6 +343,19 @@ static X_RESULT ContentXuid(uint32_t user_index, uint64_t& xuid) {
   return X_ERROR_SUCCESS;
 }
 
+// A request with an overlapped completes it with ERROR_FUNCTION_FAILED and its
+// error as an HRESULT, or with success.
+static X_RESULT CompleteRequest(pointer_t<XAM_OVERLAPPED> overlapped_ptr,
+                                X_RESULT result) {
+  if (!overlapped_ptr) {
+    return result;
+  }
+  kernel_state()->CompleteOverlappedImmediateEx(
+      overlapped_ptr, result ? X_ERROR_FUNCTION_FAILED : X_ERROR_SUCCESS,
+      X_HRESULT_FROM_WIN32(result), 0);
+  return X_ERROR_IO_PENDING;
+}
+
 dword_result_t xeXamContentCreate(dword_t user_index, lpstring_t root_name,
                                   lpvoid_t content_data_ptr,
                                   dword_t content_data_size, dword_t flags,
@@ -560,15 +573,9 @@ DECLARE_XAM_EXPORT1(XamContentFlush, kContent, kStub);
 dword_result_t XamContentClose_entry(lpstring_t root_name,
                                      pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
   // Closes a previously opened root from XamContentCreate*.
-  auto result =
-      kernel_state()->content_manager()->CloseContent(root_name.value());
-
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  } else {
-    return result;
-  }
+  return CompleteRequest(
+      overlapped_ptr,
+      kernel_state()->content_manager()->CloseContent(root_name.value()));
 }
 DECLARE_XAM_EXPORT1(XamContentClose, kContent, kImplemented);
 
@@ -633,20 +640,18 @@ DECLARE_XAM_EXPORT1(XamContentGetCreator, kContent, kImplemented);
 dword_result_t XamContentGetThumbnail_entry(
     dword_t user_index, lpvoid_t content_data_ptr, lpvoid_t buffer_ptr,
     lpdword_t buffer_size_ptr, pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  uint64_t xuid = 0;
-  if (const X_RESULT result = ContentXuid(user_index, xuid)) {
-    return result;
-  }
-
   assert_not_null(buffer_size_ptr);
-  uint32_t buffer_size = *buffer_size_ptr;
   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
 
-  // Get thumbnail (if it exists).
+  uint64_t xuid = 0;
+  X_RESULT result = ContentXuid(user_index, xuid);
   std::vector<uint8_t> buffer;
-  auto result = kernel_state()->content_manager()->GetContentThumbnail(
-      xuid, content_data, &buffer);
   if (!result) {
+    result = kernel_state()->content_manager()->GetContentThumbnail(
+        xuid, content_data, &buffer);
+  }
+  if (!result) {
+    const uint32_t buffer_size = *buffer_size_ptr;
     if (!buffer_ptr) {
       // Only a query for the size gets it back.
       *buffer_size_ptr = uint32_t(buffer.size());
@@ -656,38 +661,25 @@ dword_result_t XamContentGetThumbnail_entry(
       std::memcpy((uint8_t*)buffer_ptr, buffer.data(), buffer.size());
     }
   }
-
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  } else {
-    return result;
-  }
+  return CompleteRequest(overlapped_ptr, result);
 }
 DECLARE_XAM_EXPORT1(XamContentGetThumbnail, kContent, kImplemented);
 
 dword_result_t XamContentSetThumbnail_entry(
     dword_t user_index, lpvoid_t content_data_ptr, lpvoid_t buffer_ptr,
     dword_t buffer_size, pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  uint64_t xuid = 0;
-  if (const X_RESULT result = ContentXuid(user_index, xuid)) {
-    return result;
-  }
-
   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
 
-  // Buffer is PNG data.
-  auto buffer = std::vector<uint8_t>((uint8_t*)buffer_ptr,
-                                     (uint8_t*)buffer_ptr + buffer_size);
-  auto result = kernel_state()->content_manager()->SetContentThumbnail(
-      xuid, content_data, std::move(buffer));
-
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  } else {
-    return result;
+  uint64_t xuid = 0;
+  X_RESULT result = ContentXuid(user_index, xuid);
+  if (!result) {
+    // Buffer is PNG data.
+    auto buffer = std::vector<uint8_t>((uint8_t*)buffer_ptr,
+                                       (uint8_t*)buffer_ptr + buffer_size);
+    result = kernel_state()->content_manager()->SetContentThumbnail(
+        xuid, content_data, std::move(buffer));
   }
+  return CompleteRequest(overlapped_ptr, result);
 }
 DECLARE_XAM_EXPORT1(XamContentSetThumbnail, kContent, kImplemented);
 
@@ -705,13 +697,7 @@ dword_result_t xeXamContentDelete(dword_t user_index, lpvoid_t content_data_ptr,
     result =
         kernel_state()->content_manager()->DeleteContent(xuid, content_data);
   }
-
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  } else {
-    return result;
-  }
+  return CompleteRequest(overlapped_ptr, result);
 }
 
 dword_result_t XamContentDelete_entry(
