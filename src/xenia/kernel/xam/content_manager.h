@@ -244,6 +244,9 @@ class ContentManager {
       const std::string_view root_name, const uint64_t xuid,
       const XCONTENT_AGGREGATE_DATA& data, const uint32_t disc_number = -1);
 
+  // What any request for the content fails with because of its file name.
+  X_RESULT CheckPackageName(const uint64_t xuid,
+                            const XCONTENT_AGGREGATE_DATA& data);
   bool ContentExists(const uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data);
   X_RESULT WriteContentHeaderFile(const uint64_t xuid,
                                   XCONTENT_AGGREGATE_DATA data);
@@ -277,8 +280,11 @@ class ContentManager {
   std::filesystem::path ResolvePackageRoot(
       const uint64_t xuid, const uint32_t title_id,
       const XContentType content_type) const;
-  std::filesystem::path ResolvePackagePath(const uint64_t xuid,
-                                           const XCONTENT_AGGREGATE_DATA& data);
+  // X_ERROR_INVALID_NAME for a file name the file system refuses and
+  // X_ERROR_PATH_NOT_FOUND for one that names no package.
+  X_RESULT ResolvePackagePath(const uint64_t xuid,
+                              const XCONTENT_AGGREGATE_DATA& data,
+                              std::filesystem::path& path);
 
   std::unordered_set<uint32_t> FindPublisherTitleIds(
       const uint64_t xuid,

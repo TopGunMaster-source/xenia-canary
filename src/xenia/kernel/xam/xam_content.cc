@@ -378,6 +378,9 @@ dword_result_t xeXamContentCreate(dword_t user_index, lpstring_t root_name,
     if (content_data.content_type == XContentType::kMarketplaceContent) {
       xuid = 0;
     }
+    if (!result) {
+      result = content_manager->CheckPackageName(xuid, content_data);
+    }
     // The root is mounted after the content is chosen so a create on a root in
     // use fails with ERROR_DUP_NAME and an open with ERROR_ALREADY_EXISTS.
     const bool root_in_use =
@@ -581,8 +584,12 @@ dword_result_t XamContentGetCreator_entry(
     X_RESULT result = ContentXuid(user_index, xuid);
     if (!result) {
       uint64_t creator = 0;
-      if (kernel_state()->content_manager()->ContentExists(xuid,
-                                                           content_data)) {
+      auto content_manager = kernel_state()->content_manager();
+      result = content_manager->CheckPackageName(xuid, content_data);
+      if (!result && !content_manager->ContentExists(xuid, content_data)) {
+        result = X_ERROR_PATH_NOT_FOUND;
+      }
+      if (!result) {
         // User always creates saves.
         if (content_data.content_type == XContentType::kSavedGame) {
           creator = xuid;
@@ -590,8 +597,6 @@ dword_result_t XamContentGetCreator_entry(
         if (creator_xuid_ptr) {
           *creator_xuid_ptr = creator;
         }
-      } else {
-        result = X_ERROR_PATH_NOT_FOUND;
       }
       // xam compares even when the content is missing.
       *is_creator_ptr = creator == xuid;
