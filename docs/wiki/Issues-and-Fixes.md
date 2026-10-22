@@ -125,10 +125,15 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
   * Use Windows *placeholders*, which on current Windows accept 4 KB views at 4 KB offsets. Xenia checks this at startup and falls back if not. Confirmed: `Alias address space is page granular`. `27f372d`
   * When XeFu has already mapped a page (it doesn't flush the TB for new mappings), map it and retry instead of emulating. `01563c6`
 
-### 26. A game section only half loaded (0xC0000190 again) 🧪
+### 26. A game section only half loaded (0xC0000190 again) ✅
 * **Symptom:** sections `.text`, `XMV`, `DSOUND`, `WMADEC` passed their SHA-1 check; `XONLINE` failed. Comparing RAM with the XBE showed exactly the first 64 KB copied and the rest zero.
 * **Cause:** XeFu's copy routine (hypercall `060E`) stops early when CR bit 4 says an interrupt is pending, expecting to resume after the interrupt. If no interrupt is actually deliverable, XeFu's dispatcher continues past the copy. Xenia set that bit from another thread, so the bit could outlive the interrupt and the copy was silently cut short.
-* **Fix:** set the bit only while an interrupt is pending *and* enabled, and take it back if that changed meanwhile. `40af7de`. Built, not yet tested.
+* **Fix:** set the bit only while an interrupt is pending *and* enabled, and take it back if that changed meanwhile. `40af7de`. Confirmed: `XONLINE` now passes.
+
+### 31. The end of section `XNET` came from the wrong place (0xC0000190) 🧪
+* **Symptom:** `XNET` failed its SHA-1 check. Comparing RAM with the XBE showed everything right except the last 0x10E8 bytes, which held data from a different part of the file (from the next read-ahead buffer).
+* **Cause:** XeFu's I/O thread reads ahead asynchronously. Its completion routine (an APC) reads the byte count from the read's `IO_STATUS_BLOCK`, which lives on a stack frame that has already returned. On the 360 that works, because the kernel writes the status block during completion, in the same thread, right before the APC runs. Xenia wrote it when the read was issued, so by the time the APC ran, the stack had been reused and XeFu recorded a garbage length for that buffer.
+* **Fix:** for `NtReadFile`, `NtReadFileScatter` and `NtWriteFile` with a completion APC, write the status block again just before the APC is delivered. Built, not yet tested.
 
 ---
 

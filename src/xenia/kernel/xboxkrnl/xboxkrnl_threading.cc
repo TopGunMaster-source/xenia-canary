@@ -9,6 +9,8 @@
 
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "xenia/base/atomic.h"
@@ -17,6 +19,7 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
+#include "xenia/kernel/xfile.h"
 #include "xenia/kernel/xsemaphore.h"
 #include "xenia/kernel/xtimer.h"
 #include "xenia/xbox.h"
@@ -1341,9 +1344,43 @@ dword_result_t KfRaiseIrql_entry(dword_t new_irql, const ppc_context_t& ctx) {
 
 DECLARE_XBOXKRNL_EXPORT2(KfRaiseIrql, kThreading, kImplemented, kHighFrequency);
 
+// I/O completions whose status block must be (re)written when their user APC
+// is delivered. The 360 kernel writes an IO_STATUS_BLOCK during completion,
+// in the context of the requesting thread, immediately before the user APC
+// runs; titles may pass a status block on a stack frame that has already been
+// reused by then (XeFu's I/O thread does), so writing it only at call time
+// leaves the APC reading garbage.
+struct PendingApcIoStatus {
+  uint32_t iosb_ptr;
+  uint32_t status;
+  uint32_t information;
+};
+static std::mutex g_apc_io_status_mutex;
+static std::unordered_map<uint32_t, PendingApcIoStatus> g_apc_io_status;
+
+static bool TakeApcIoStatus(uint32_t apc_ptr, PendingApcIoStatus* out) {
+  std::lock_guard<std::mutex> lock(g_apc_io_status_mutex);
+  auto it = g_apc_io_status.find(apc_ptr);
+  if (it == g_apc_io_status.end()) {
+    return false;
+  }
+  *out = it->second;
+  g_apc_io_status.erase(it);
+  return true;
+}
+
 uint32_t xeNtQueueApcThread(uint32_t thread_handle, uint32_t apc_routine,
                             uint32_t apc_routine_context, uint32_t arg1,
                             uint32_t arg2, cpu::ppc::PPCContext* context) {
+  return xeNtQueueApcThreadWithIoStatus(thread_handle, apc_routine,
+                                        apc_routine_context, arg1, arg2, 0, 0,
+                                        0, context);
+}
+
+uint32_t xeNtQueueApcThreadWithIoStatus(
+    uint32_t thread_handle, uint32_t apc_routine, uint32_t apc_routine_context,
+    uint32_t arg1, uint32_t arg2, uint32_t iosb_ptr, uint32_t iosb_status,
+    uint32_t iosb_information, cpu::ppc::PPCContext* context) {
   auto kernelstate = context->kernel_state;
   auto memory = kernelstate->memory();
   auto thread =
@@ -1357,6 +1394,15 @@ uint32_t xeNtQueueApcThread(uint32_t thread_handle, uint32_t apc_routine,
   uint32_t apc_ptr = memory->SystemHeapAlloc(XAPC::kSize);
   if (!apc_ptr) {
     return X_STATUS_NO_MEMORY;
+  }
+  {
+    // A freed APC's address can be reused; never carry a stale entry over.
+    std::lock_guard<std::mutex> lock(g_apc_io_status_mutex);
+    if (iosb_ptr) {
+      g_apc_io_status[apc_ptr] = {iosb_ptr, iosb_status, iosb_information};
+    } else {
+      g_apc_io_status.erase(apc_ptr);
+    }
   }
   XAPC* apc = context->TranslateVirtual<XAPC*>(apc_ptr);
   xeKeInitializeApc(apc, thread->guest_object(), XAPC::kDummyKernelRoutine, 0,
@@ -1416,6 +1462,12 @@ X_STATUS xeProcessUserApcs(PPCContext* ctx) {
 
     xeKeKfReleaseSpinLock(ctx, &current_thread->apc_lock, unlocked_irql);
     alert_status = X_STATUS_USER_APC;
+    PendingApcIoStatus io_status;
+    if (TakeApcIoStatus(apc_ptr, &io_status)) {
+      auto iosb = ctx->TranslateVirtual<X_IO_STATUS_BLOCK*>(io_status.iosb_ptr);
+      iosb->status = io_status.status;
+      iosb->information = io_status.information;
+    }
     if (apc->kernel_routine != XAPC::kDummyKernelRoutine) {
       uint64_t kernel_args[] = {
           apc_ptr,

@@ -442,6 +442,11 @@ class XThread : public XObject, public cpu::Thread {
 
   void EnqueueApc(uint32_t normal_routine, uint32_t normal_context,
                   uint32_t arg1, uint32_t arg2);
+  // Like EnqueueApc for an I/O completion: the IO_STATUS_BLOCK at iosb_ptr
+  // (also passed as arg1) is written right before the APC runs.
+  void EnqueueIoCompletionApc(uint32_t normal_routine, uint32_t normal_context,
+                              uint32_t iosb_ptr, uint32_t status,
+                              uint32_t information);
 
   int32_t priority() const { return priority_; }
   int32_t QueryPriority();

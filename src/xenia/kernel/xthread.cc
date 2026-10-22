@@ -676,6 +676,16 @@ void XThread::EnqueueApc(uint32_t normal_routine, uint32_t normal_context,
   xenia_assert(success == X_STATUS_SUCCESS);
 }
 
+void XThread::EnqueueIoCompletionApc(uint32_t normal_routine,
+                                     uint32_t normal_context, uint32_t iosb_ptr,
+                                     uint32_t status, uint32_t information) {
+  uint32_t success = xboxkrnl::xeNtQueueApcThreadWithIoStatus(
+      this->handle(), normal_routine, normal_context, iosb_ptr, 0, iosb_ptr,
+      status, information, cpu::ThreadState::Get()->context());
+
+  xenia_assert(success == X_STATUS_SUCCESS);
+}
+
 void XThread::SetCurrentThread() { current_xthread_tls_ = this; }
 
 void XThread::DeliverAPCs() {

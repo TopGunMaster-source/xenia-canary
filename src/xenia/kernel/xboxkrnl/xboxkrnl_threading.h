@@ -60,6 +60,12 @@ uint32_t xeKeInsertQueueApc(XAPC* apc, uint32_t arg1, uint32_t arg2,
 uint32_t xeNtQueueApcThread(uint32_t thread_handle, uint32_t apc_routine,
                             uint32_t apc_routine_context, uint32_t arg1,
                             uint32_t arg2, cpu::ppc::PPCContext* context);
+// Queues a user APC and writes {iosb_status, iosb_information} to the
+// IO_STATUS_BLOCK at iosb_ptr right before the APC is delivered.
+uint32_t xeNtQueueApcThreadWithIoStatus(
+    uint32_t thread_handle, uint32_t apc_routine, uint32_t apc_routine_context,
+    uint32_t arg1, uint32_t arg2, uint32_t iosb_ptr, uint32_t iosb_status,
+    uint32_t iosb_information, cpu::ppc::PPCContext* context);
 void xeKfLowerIrql(PPCContext* ctx, unsigned char new_irql);
 unsigned char xeKfRaiseIrql(PPCContext* ctx, unsigned char new_irql);
 
