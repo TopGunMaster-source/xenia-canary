@@ -86,6 +86,8 @@ class KeyboardInputDriver final : public InputDriver {
 
   KeyboardWindowInputListener window_input_listener_;
 
+  xe_mutex state_lock_;
+  X_INPUT_GAMEPAD last_gamepad_ = {};
   uint32_t packet_number_ = 1;
 };
 

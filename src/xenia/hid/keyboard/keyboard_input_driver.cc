@@ -260,8 +260,6 @@ X_RESULT KeyboardInputDriver::GetState(uint32_t user_index,
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
-  packet_number_++;
-
   uint16_t buttons = 0;
   uint8_t left_trigger = 0;
   uint8_t right_trigger = 0;
@@ -356,7 +354,6 @@ X_RESULT KeyboardInputDriver::GetState(uint32_t user_index,
     }
   }
 
-  out_state->packet_number = packet_number_;
   out_state->gamepad.buttons = buttons;
   out_state->gamepad.left_trigger = left_trigger;
   out_state->gamepad.right_trigger = right_trigger;
@@ -364,6 +361,15 @@ X_RESULT KeyboardInputDriver::GetState(uint32_t user_index,
   out_state->gamepad.thumb_ly = thumb_ly;
   out_state->gamepad.thumb_rx = thumb_rx;
   out_state->gamepad.thumb_ry = thumb_ry;
+  {
+    std::lock_guard<xe_mutex> guard(state_lock_);
+    if (std::memcmp(&out_state->gamepad, &last_gamepad_,
+                    sizeof(last_gamepad_)) != 0) {
+      last_gamepad_ = out_state->gamepad;
+      ++packet_number_;
+    }
+    out_state->packet_number = packet_number_;
+  }
 
   if (IsPassthroughEnabled()) {
     std::memset(out_state, 0, sizeof(*out_state));
