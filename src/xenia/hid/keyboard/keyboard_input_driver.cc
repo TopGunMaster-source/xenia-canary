@@ -392,17 +392,19 @@ X_RESULT KeyboardInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
   uint16_t keystroke_flags = 0;
   uint8_t hid_code = 0;
 
-  // Pop from the queue.
+  // Pop from the queue. A release is sent only for a press the title received,
+  // and repeats of a press it didn't receive aren't a new press.
+  auto global_lock = global_critical_region_.Acquire();
   KeyEvent evt;
-  {
-    auto global_lock = global_critical_region_.Acquire();
+  do {
     if (key_events_.empty()) {
       // No keys!
       return X_ERROR_EMPTY;
     }
     evt = key_events_.front();
     key_events_.pop();
-  }
+  } while (evt.transition ? evt.prev_state && !delivered_.count(evt.virtual_key)
+                          : !delivered_.erase(evt.virtual_key));
 
   if (!IsPassthroughEnabled()) {
     for (const KeyBinding& b : key_bindings_) {
@@ -434,7 +436,7 @@ X_RESULT KeyboardInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
   if (xinput_virtual_key != ui::VirtualKey::kNone) {
     if (evt.transition == true) {
       keystroke_flags |= 0x0001;  // XINPUT_KEYSTROKE_KEYDOWN
-      if (evt.prev_state == evt.transition) {
+      if (!delivered_.insert(evt.virtual_key).second) {
         keystroke_flags |= 0x0004;  // XINPUT_KEYSTROKE_REPEAT
       }
     } else if (evt.transition == false) {
@@ -483,12 +485,33 @@ void KeyboardInputDriver::ClearPressedKeys() {
   for (auto& b : key_bindings_) {
     b.is_pressed = false;
   }
+  // Keystroke readers get the releases too.
+  for (const auto& [virtual_key, is_capital] : keys_down_) {
+    KeyEvent release;
+    release.virtual_key = virtual_key;
+    release.is_capital = is_capital;
+    key_events_.push(release);
+  }
+  keys_down_.clear();
 }
 
 void KeyboardInputDriver::OnKey(ui::KeyEvent& e, bool is_down) {
   auto global_lock = global_critical_region_.Acquire();
 
-  const bool is_capital = e.is_shift_pressed();
+  // Ignore releases and repeats of keys whose press another listener handled.
+  // A held key keeps the shift state of its press so it maps to one binding
+  // throughout.
+  auto it = keys_down_.find(e.virtual_key());
+  if (it == keys_down_.end()) {
+    if (!is_down || e.prev_state()) {
+      return;
+    }
+    it = keys_down_.emplace(e.virtual_key(), e.is_shift_pressed()).first;
+  }
+  const bool is_capital = it->second;
+  if (!is_down) {
+    keys_down_.erase(it);
+  }
 
   KeyEvent key;
   key.virtual_key = e.virtual_key();
