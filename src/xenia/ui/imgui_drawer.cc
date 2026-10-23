@@ -976,6 +976,7 @@ void ImGuiDrawer::ClearInput() {
   io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
   std::memset(io.MouseDown, 0, sizeof(io.MouseDown));
   io.ClearInputKeys();
+  keys_down_.clear();
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
   reset_mouse_position_after_next_frame_ = false;
 }
@@ -984,7 +985,14 @@ void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
   auto& io = GetIO();
   const VirtualKey virtual_key = e.virtual_key();
   if (auto imGuiKey = VirtualKeyToImGuiKey(virtual_key); imGuiKey) {
-    io.AddKeyEvent(*imGuiKey, is_down);
+    // Repeats of a key held since before the drawer attached aren't presses.
+    if (!is_down) {
+      keys_down_.erase(virtual_key);
+      io.AddKeyEvent(*imGuiKey, false);
+    } else if (!e.prev_state() || keys_down_.count(virtual_key)) {
+      keys_down_.insert(virtual_key);
+      io.AddKeyEvent(*imGuiKey, true);
+    }
   }
   switch (virtual_key) {
     case VirtualKey::kShift:
