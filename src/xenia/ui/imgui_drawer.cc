@@ -261,6 +261,7 @@ std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
       {ui::VirtualKey::kEnd, ImGuiKey_End},
       {ui::VirtualKey::kDelete, ImGuiKey_Delete},
       {ui::VirtualKey::kBack, ImGuiKey_Backspace},
+      {ui::VirtualKey::kSpace, ImGuiKey_Space},
       {ui::VirtualKey::kReturn, ImGuiKey_Enter},
       {ui::VirtualKey::kEscape, ImGuiKey_Escape},
       {ui::VirtualKey::kA, ImGuiKey_A},
