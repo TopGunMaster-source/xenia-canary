@@ -1551,6 +1551,16 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
     } break;
 
     case ui::VirtualKey::kEscape: {
+      // In game Esc toggles the context menu, which offers leaving fullscreen.
+      // Other open dialogs keep Esc to cancel.
+      if (emulator_->is_title_open()) {
+        if (!context_menu_ && imgui_drawer() &&
+            imgui_drawer()->HasOpenDialogs()) {
+          return;
+        }
+        ToggleContextMenu(false);
+        break;
+      }
       // Allow users to escape fullscreen (but not enter it).
       if (!window_->IsFullscreen()) {
         return;
