@@ -853,8 +853,8 @@ void EmulatorWindow::OnEmulatorInitialized() {
         XELOGI(
             "Launching new title: host_path={}, launch_module={}, flags={}, "
             "data_len={}, xbox_disc={}",
-            host_path, launch_module, launch_flags, launch_data.length(),
-            xbox_disc);
+            xe::strip_pii(host_path), launch_module, launch_flags,
+            launch_data.length(), xe::strip_pii(xbox_disc));
 
         std::vector<std::string> args;
         // Preserve return_to_ui through the title-to-title chain
@@ -1729,7 +1729,8 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
                                const xe::ui::RawImage& image) {
   auto file = std::ofstream(filepath, std::ios::binary);
   if (!file.is_open()) {
-    XELOGE("Failed to open file for writing: {}", filepath);
+    XELOGE("Failed to open file for writing: {}",
+           xe::strip_pii(xe::path_to_utf8(filepath)));
     return;
   }
 
@@ -1741,7 +1742,8 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
       &file, image.width, image.height, 4, image.data.data(),
       (int)image.stride);
   if (result == 0) {
-    XELOGE("Failed to write PNG to file: {}", filepath);
+    XELOGE("Failed to write PNG to file: {}",
+           xe::strip_pii(xe::path_to_utf8(filepath)));
     return;
   }
 }
@@ -3418,7 +3420,7 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   // Verify the file exists
   if (!path_to_file.empty() && !std::filesystem::exists(path_to_file)) {
     XELOGE("Cannot launch title - file not found: {}",
-           xe::path_to_utf8(path_to_file));
+           xe::strip_pii(xe::path_to_utf8(path_to_file)));
     return;
   }
 
@@ -3428,7 +3430,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     return;
   }
 
-  XELOGI("Launched title in new process: {}", xe::path_to_utf8(path_to_file));
+  XELOGI("Launched title in new process: {}",
+         xe::strip_pii(xe::path_to_utf8(path_to_file)));
 
   // Exit UI process - game process will spawn new UI when it exits
   xe::FlushLog();
