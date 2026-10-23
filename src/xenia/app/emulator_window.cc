@@ -1497,6 +1497,15 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
     return;
   }
 
+  // A held hotkey acts once and its repeats are swallowed with it.
+  if (e.prev_state()) {
+    if (hotkeys_down_.count(e.virtual_key())) {
+      e.set_handled(true);
+    }
+    return;
+  }
+  hotkeys_down_.erase(e.virtual_key());
+
   switch (e.virtual_key()) {
     case ui::VirtualKey::kO: {
       if (!e.is_ctrl_pressed() || emulator_->is_title_open()) {
@@ -1560,6 +1569,7 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
       return;
   }
 
+  hotkeys_down_.insert(e.virtual_key());
   e.set_handled(true);
 }
 
