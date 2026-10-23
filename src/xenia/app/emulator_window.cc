@@ -1342,8 +1342,6 @@ bool EmulatorWindow::Initialize() {
       game_list_panel_ = new GameListPanel(frame, this);
       game_list_panel_->SetLaunchCallback(
           [this](const std::filesystem::path& path) { RunTitle(path); });
-      game_list_panel_->SetSelectionChangedCallback(
-          [this]() { ApplyContentVisibility(); });
       aui->AddPane(game_list_panel_,
                    wxAuiPaneInfo().Name("game_list").CenterPane());
       aui->Update();

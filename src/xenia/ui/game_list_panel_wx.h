@@ -42,16 +42,12 @@ class GameListPanel : public wxPanel {
   enum class SortKey { kLastPlayed, kTitle, kStatus };
 
   using LaunchCallback = std::function<void(const std::filesystem::path&)>;
-  using SelectionChangedCallback = std::function<void()>;
 
   GameListPanel(wxWindow* parent, EmulatorWindow* emulator_window);
   ~GameListPanel() override = default;
 
   void Reload();
   void SetLaunchCallback(LaunchCallback cb) { launch_cb_ = std::move(cb); }
-  void SetSelectionChangedCallback(SelectionChangedCallback cb) {
-    selection_changed_cb_ = std::move(cb);
-  }
   // Returns the selected title's path, or empty if nothing selected.
   std::filesystem::path GetSelectedPath() const;
 
@@ -151,7 +147,6 @@ class GameListPanel : public wxPanel {
   std::vector<Entry> entries_;
   std::vector<size_t> visible_indices_;
   LaunchCallback launch_cb_;
-  SelectionChangedCallback selection_changed_cb_;
   std::string filter_lower_;
   // Bumped on each Reload so in-flight icon-load chunks abort.
   int icon_load_generation_ = 0;

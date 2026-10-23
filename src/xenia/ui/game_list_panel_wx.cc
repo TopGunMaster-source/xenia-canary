@@ -559,9 +559,6 @@ void GameListPanel::OnItemActivated(int index) {
 void GameListPanel::OnSelectionChanged() {
   info_pane_closed_ = false;
   RefreshInfoPane();
-  if (selection_changed_cb_) {
-    selection_changed_cb_();
-  }
 }
 
 CompatState GameListPanel::GetEntryCompatState(const Entry& e) const {
