@@ -21,6 +21,7 @@
 #include <wx/bitmap.h>
 #include <wx/panel.h>
 #include <wx/srchctrl.h>
+#include <wx/timer.h>
 
 #include "xenia/app/game_compat_db.h"
 #include "xenia/app/game_library.h"
@@ -103,7 +104,7 @@ class GameListPanel : public wxPanel {
 
   void OnSearch(wxCommandEvent& event);
   void OnItemActivated(int index);
-  void OnSelectionChanged();
+  void OnSelectionChanged(bool clicked);
   void OnSortChanged();
   // Compat DB state for `e`, optimistically upgraded by the user's local
   // achievement progress (10%+ promotes Unknown to Gameplay; 80%+ promotes
@@ -142,6 +143,7 @@ class GameListPanel : public wxPanel {
   // Set by the pane's close button. Sorting and filtering leave it shut;
   // picking a game clears it.
   bool info_pane_closed_ = false;
+  wxTimer pane_open_timer_;
   // Survives the entries_ rebuild so sort/filter/reload can restore the row.
   LibraryKey selected_key_;
   std::vector<Entry> entries_;
