@@ -508,6 +508,12 @@ void KeyboardInputDriver::DiscardKeystrokes() {
   key_events_.swap(releases);
 }
 
+void KeyboardInputDriver::ResetKeystrokes() {
+  auto global_lock = global_critical_region_.Acquire();
+  key_events_ = {};
+  delivered_.clear();
+}
+
 void KeyboardInputDriver::OnKey(ui::KeyEvent& e, bool is_down) {
   auto global_lock = global_critical_region_.Acquire();
 

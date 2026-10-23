@@ -80,6 +80,8 @@ class InputDriver {
   // Drops queued keystrokes made while UI held the input so the title doesn't
   // get them once it closes.
   virtual void DiscardKeystrokes() {}
+  // Forgets keystrokes the previous title received or left queued.
+  virtual void ResetKeystrokes() {}
 
   // Drivers invoke NotifyDevicesChanged() after their EnumerateDevices result
   // changes (hotplug add/remove). InputSystem registers this callback during
