@@ -434,6 +434,15 @@ def trivial_pixel_shader():
     return s
 
 
+# Render state.
+
+SCREEN_XY = 2  # SQ_CONTEXT_MISC.sc_output_screen_xy
+# PA_SU_SC_MODE_CNTL: vtx_window_offset_enable, and msaa_enable.
+MODE_CNTL = 1 << 16
+MSAA_ENABLE = 1 << 15
+AA_CONFIG = (0, 0x8001, 0xC003)  # Direct3D's PA_SC_AA_CONFIG at 1x, 2x, 4x
+
+
 # Textures.
 
 SWIZZLE_XYZW = 0x688  # texture fetch constant swizzle: each from itself

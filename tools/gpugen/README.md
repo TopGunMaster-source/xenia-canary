@@ -42,6 +42,9 @@ the console needs that Xenia doesn't:
   preceding full fetch prefetches (`fetch_inputs`).
 - Vertex shader memory export runs in multipass export mode and ends like
   Direct3D's memexport shaders (`memexport_shader`).
+- PsParamGen.xy is the pixel position only with
+  SQ_CONTEXT_MISC.sc_output_screen_xy, and multisampling takes
+  PA_SC_AA_CONFIG as well as RB_SURFACE_INFO.msaa_samples.
 
 Suites:
 
@@ -55,3 +58,8 @@ Suites:
   export formats and addressing.
 - `tfetch`, `tfetch_formats`, `tfilter`, `tfilter_probes`: texture fetch
   conversions, block formats, endianness, filtering and addressing.
+- `pixel`, `pixel_probes`, `snap`, `msaa`: pixel shader inputs (interpolation,
+  PsParamGen), vertex snapping and multisample coverage.
+- `rb`, `blend`, `depth`, `zdepth`, `alpha`, `msaarb`: render target formats,
+  blending, depth formats and polygon offset, alpha test and alpha to mask,
+  MSAA samples and resolves.
