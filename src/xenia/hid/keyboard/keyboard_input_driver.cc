@@ -495,6 +495,19 @@ void KeyboardInputDriver::ClearPressedKeys() {
   keys_down_.clear();
 }
 
+void KeyboardInputDriver::DiscardKeystrokes() {
+  auto global_lock = global_critical_region_.Acquire();
+  // Releases of presses the title received are kept so they still pair.
+  std::queue<KeyEvent> releases;
+  for (; !key_events_.empty(); key_events_.pop()) {
+    const KeyEvent& evt = key_events_.front();
+    if (!evt.transition && delivered_.count(evt.virtual_key)) {
+      releases.push(evt);
+    }
+  }
+  key_events_.swap(releases);
+}
+
 void KeyboardInputDriver::OnKey(ui::KeyEvent& e, bool is_down) {
   auto global_lock = global_critical_region_.Acquire();
 

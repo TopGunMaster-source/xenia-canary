@@ -37,6 +37,7 @@ class KeyboardInputDriver final : public InputDriver {
                         X_INPUT_KEYSTROKE* out_keystroke) override;
   virtual InputType GetInputType() const override;
   std::vector<InputDeviceInfo> EnumerateDevices() override;
+  void DiscardKeystrokes() override;
 
  protected:
   class KeyboardWindowInputListener final : public ui::WindowInputListener,
