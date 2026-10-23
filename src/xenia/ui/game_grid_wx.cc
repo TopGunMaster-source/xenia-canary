@@ -351,6 +351,10 @@ void GameGrid::OnMouse(wxMouseEvent& event) {
 }
 
 void GameGrid::OnKeyDown(wxKeyEvent& event) {
+  // wxWANTS_CHARS keeps Tab from moving focus, so navigate explicitly.
+  if (HandleAsNavigationKey(event)) {
+    return;
+  }
   if (items_.empty()) {
     event.Skip();
     return;
