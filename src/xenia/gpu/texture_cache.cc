@@ -417,6 +417,15 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   Texture* textures_to_load[64];  // max bits = 32, can be unsigned + signed
                                   // means max array size = 64
   uint32_t num_textures_to_load = 0;
+  // Textures bound to multiple fetch constants are only loaded once.
+  auto queue_texture_to_load = [&](Texture* texture) {
+    for (uint32_t i = 0; i < num_textures_to_load; ++i) {
+      if (textures_to_load[i] == texture) {
+        return;
+      }
+    }
+    textures_to_load[num_textures_to_load++] = texture;
+  };
   {
     SCOPE_profile_cpu_i("gpu", "TextureCache::UpdateBindingKeys");
     while (xe::bit_scan_forward(textures_remaining, &index)) {
@@ -508,10 +517,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
         binding.texture_signed = nullptr;
       }
       if (load_unsigned_data && binding.texture != nullptr) {
-        textures_to_load[num_textures_to_load++] = binding.texture;
+        queue_texture_to_load(binding.texture);
       }
       if (load_signed_data && binding.texture_signed != nullptr) {
-        textures_to_load[num_textures_to_load++] = binding.texture_signed;
+        queue_texture_to_load(binding.texture_signed);
       }
     }
   }
