@@ -1067,6 +1067,48 @@ class SpirvShaderTranslator : public ShaderTranslator {
       spv::Id constant_alpha_clamped, spv::Id equation, spv::Id source_factor,
       spv::Id dest_factor);
 
+  // 8_8_8_8, 8_8_8_8_GAMMA, 2_10_10_10 and 2_10_10_10_AS_10_10_10_10 blend in
+  // the render backend's 10-bit fixed point (FSI_BlendFixed10), the other
+  // formats in floats.
+  static bool FSI_BlendsInFixed10(xenos::ColorRenderTargetFormat format);
+  // Of those, the formats with 8-bit fields rather than 10:10:10:2.
+  static bool FSI_Fixed10Is8bpc(xenos::ColorRenderTargetFormat format);
+  // A float scalar or vector to n-bit unorm (uint) the way the render backend
+  // converts it: clamped, truncated to 23 fraction bits, then rounded half up.
+  // NaN converts by its sign like infinity.
+  spv::Id FSI_FloatToUnorm(spv::Id value, uint32_t bits);
+  // A uint or uint3 8-bit unorm widened to 10 bits by bit replication.
+  spv::Id FSI_Widen8To10(spv::Id value);
+  // uint3 10-bit linear to 8-bit gamma, the render target's curve.
+  spv::Id FSI_LinearToGamma8(spv::Id linear);
+  // uint3 8-bit gamma to 10-bit linear, the exact inverse of the curve.
+  spv::Id FSI_Gamma8ToLinear10(spv::Id gamma);
+  // The blending operands (uint4, 10 bits) of the exported color, quantized
+  // to what the format stores first.
+  spv::Id FSI_SourceToFixed10(spv::Id color,
+                              xenos::ColorRenderTargetFormat format);
+  // The blending operands (uint4, 10 bits) of a stored pixel.
+  spv::Id FSI_UnpackToFixed10(spv::Id packed,
+                              xenos::ColorRenderTargetFormat format);
+  // A blend factor of 10-bit operands before widening, for the color (uint3)
+  // or the alpha (uint).
+  spv::Id FSI_BlendFactorFixed10(spv::Id factor, bool is_alpha, spv::Id source,
+                                 spv::Id dest, spv::Id constant);
+  // Packs uint3 color and uint alpha fields, at the widths the format stores,
+  // into one of the FSI_BlendsInFixed10 formats.
+  spv::Id FSI_PackUnitFields(spv::Id rgb, spv::Id alpha,
+                             xenos::ColorRenderTargetFormat format);
+  // Converts and packs a color into one of the FSI_BlendsInFixed10 formats.
+  spv::Id FSI_PackUnitColor(spv::Id color,
+                            xenos::ColorRenderTargetFormat format);
+  // Blends 10-bit operands and packs the result into the format.
+  spv::Id FSI_BlendFixed10(xenos::ColorRenderTargetFormat format,
+                           spv::Id source, spv::Id dest, spv::Id constant,
+                           spv::Id color_equation, spv::Id color_source_factor,
+                           spv::Id color_dest_factor, spv::Id alpha_equation,
+                           spv::Id alpha_source_factor,
+                           spv::Id alpha_dest_factor);
+
   Features features_;
   bool native_2x_msaa_with_attachments_;
   bool native_2x_msaa_no_attachments_;
