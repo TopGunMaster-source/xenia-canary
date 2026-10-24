@@ -35,7 +35,8 @@ spv::Op DerivativeYOp() {
 }  // namespace
 
 bool SpirvShaderTranslator::IsGuestPixelCenterFetchNeeded() const {
-  return is_pixel_shader() && !is_depth_only_fragment_shader_ &&
+  return cvars::texture_point_snap && is_pixel_shader() &&
+         !is_depth_only_fragment_shader_ &&
          (GetCurrentDrawResolutionScaleX() > 1 ||
           GetCurrentDrawResolutionScaleY() > 1) &&
          (current_shader().point_fetch_coordinate_registers() &
@@ -742,7 +743,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
             : instr.dimension;
 
     // Texel center snap instead of the epsilon (see CanSnapToTexelCenter).
-    bool point_snap = instr.CanSnapToTexelCenter(use_computed_lod);
+    bool point_snap = cvars::texture_point_snap &&
+                      instr.CanSnapToTexelCenter(use_computed_lod);
 
     spv::Id sampler = spv::NoResult;
     spv::Id sampler_signed = spv::NoResult;

@@ -497,9 +497,10 @@ dword_result_t KeDelayExecutionThread_entry(dword_t processor_mode,
                                             lpqword_t interval_ptr,
                                             const ppc_context_t& context) {
   SCOPE_profile_cpu_i("guestsync", "KeDelayExecutionThread");
+  // The kernel reads the interval unconditionally, so a null one faults on the
+  // console. Yield rather than crash the host.
   uint64_t interval = interval_ptr ? static_cast<uint64_t>(*interval_ptr) : 0u;
-  return KeDelayExecutionThread(processor_mode, alertable,
-                                interval_ptr ? &interval : nullptr, context);
+  return KeDelayExecutionThread(processor_mode, alertable, &interval, context);
 }
 DECLARE_XBOXKRNL_EXPORT3(KeDelayExecutionThread, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
