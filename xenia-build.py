@@ -13,6 +13,7 @@ from glob import glob
 from json import loads as jsonloads
 import hashlib
 import os
+from re import fullmatch as re_fullmatch
 import platform
 from shutil import rmtree, copy2, which as shutil_which
 import subprocess
@@ -116,7 +117,7 @@ VS_GENERATOR_MAP = {
 vs_install_path = None
 
 
-def get_vs_generator(vs_path, product_line_version):
+def get_vs_generator(vs_path, product_line_version, platform_type):
     """Returns the CMake Visual Studio generator and optional platform toolset.
 
     For newer VS versions, use the latest generator in the table with the newest
@@ -132,9 +133,22 @@ def get_vs_generator(vs_path, product_line_version):
     toolset = None
     vc_dir = os.path.join(vs_path or "", "MSBuild", "Microsoft", "VC")
     if os.path.isdir(vc_dir):
-        toolsets = sorted(d for d in os.listdir(vc_dir) if d.startswith("v"))
-        if toolsets:
-            toolset = toolsets[-1]
+        # Newest VC targets folder (e.g. v180)
+        vc_versions = sorted(
+            (d for d in os.listdir(vc_dir) if re_fullmatch(r"v\d+", d)),
+            key=lambda d: int(d[1:]))
+        for vc_version in reversed(vc_versions):
+            toolsets_dir = os.path.join(
+                vc_dir, vc_version, "Platforms", platform_type, "PlatformToolsets")
+            if not os.path.isdir(toolsets_dir):
+                continue
+            toolsets = sorted(
+                (d for d in os.listdir(toolsets_dir) if re_fullmatch(r"v\d+", d)),
+                key=lambda d: int(d[1:]))
+            if toolsets:
+                toolset = toolsets[-1]
+                break
+    print(f"  Using \"{toolset}\" toolset.")
     return vs_generator, toolset
 
 
@@ -1941,7 +1955,8 @@ class DevenvCommand(Command):
         ]
         # Without -G, CMake falls back to the CMAKE_GENERATOR environment
         # variable, commonly Ninja, which rejects -A.
-        vs_generator, toolset = get_vs_generator(vs_install_path, vs_version)
+        vs_generator, toolset = get_vs_generator(vs_install_path, vs_version,
+                                                 vs_arch)
         cmake_args += ["-G", vs_generator]
         if toolset:
             cmake_args += ["-T", toolset]
