@@ -1645,6 +1645,59 @@ static std::atomic<cpu::ppc::PPCContext*> g_heartbeat_context{nullptr};
 
 static std::string DescribeKernelTimers();
 
+#if XE_USER_MODE_FAULTS
+// The host thread running user mode, for sampling where its guest code is.
+static std::atomic<HANDLE> g_user_mode_host_thread{nullptr};
+
+// Where the user-mode thread's guest code is right now: the translated
+// function under the host PC and the guest return chain on its host stack.
+static std::string SampleUserModeThread() {
+  HANDLE thread = g_user_mode_host_thread.load();
+  if (!thread || SuspendThread(thread) == DWORD(-1)) {
+    return {};
+  }
+  // Only copy while it's suspended (it may hold the heap or log lock).
+  CONTEXT context = {};
+  context.ContextFlags = CONTEXT_FULL;
+  bool ok = GetThreadContext(thread, &context) != 0;
+  static uint64_t stack[512];
+  SIZE_T read = 0;
+  if (ok && !ReadProcessMemory(GetCurrentProcess(),
+                               reinterpret_cast<void*>(context.Rsp), stack,
+                               sizeof(stack), &read)) {
+    read = 0;
+  }
+  ResumeThread(thread);
+  if (!ok) {
+    return {};
+  }
+  auto code_cache = kernel_state()->processor()->backend()->code_cache();
+  auto describe = [&](uint64_t host_pc) -> std::string {
+    auto function = code_cache->LookupFunction(host_pc);
+    if (!function) {
+      return {};
+    }
+    return fmt::format(" {:08X}(in {:08X})",
+                       function->MapMachineCodeToGuestAddress(host_pc),
+                       function->address());
+  };
+  std::string pc_text = describe(context.Rip);
+  std::string out =
+      "  guest pc:" +
+      (pc_text.empty() ? fmt::format(" host {:X}", context.Rip) : pc_text) +
+      "; stack:";
+  uint32_t found = 0;
+  for (size_t n = 0; n < read / 8 && found < 24; ++n) {
+    std::string frame = describe(stack[n]);
+    if (!frame.empty()) {
+      out += frame;
+      ++found;
+    }
+  }
+  return out + "\n";
+}
+#endif
+
 static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
   static std::atomic<bool> started{false};
   g_heartbeat_context = pc;
@@ -1686,6 +1739,9 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
                   .c_str(),
               file);
         fputs(DescribeKernelTimers().c_str(), file);
+#if XE_USER_MODE_FAULTS
+        fputs(SampleUserModeThread().c_str(), file);
+#endif
         for (const auto& trace : shim::g_thread_export_traces) {
           cpu::Export* thread_export = trace.last_export.load();
           if (thread_export) {
@@ -1891,6 +1947,13 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   state->guest_stack_depth = backend->GetGuestStackDepth(pc);
   t_user_mode = state;
   shim::t_trace_exports = true;
+#if XE_USER_MODE_FAULTS
+  if (!g_user_mode_host_thread.load()) {
+    g_user_mode_host_thread = OpenThread(
+        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+        FALSE, GetCurrentThreadId());
+  }
+#endif
   StartUserModeHeartbeat(pc);
   // The trap frame xefu raises interrupts in (see PropagateUserInterruptFlag).
   auto kthread = thread->guest_object<X_KTHREAD>();

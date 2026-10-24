@@ -17,14 +17,15 @@ Milestones in order. The numbers in brackets refer to [[Issues and Fixes]].
 | 10b | Section `XNET` and all remaining sections verified | ✅ [31] |
 | 11 | The Xbox kernel jumps to Burnout 3's entry point: **the game's own code runs** | ✅ |
 | 11b | The game gets past its first seconds (stuck on its own stack) | ✅ [32] |
-| 11c | The game's start-up runs on (Xenia crashed on a jump to unmapped code) | 🧪 fix built [33] |
+| 11c | The game's start-up runs on (Xenia crashed jumping to its own return address) | ✅ [33] |
+| 11d | XeFu's exception handler hangs during start-up | 🔍 [34] |
 | 12 | Graphics: XeFu's NV2A emulation on Xenia's GPU | ⏳ |
 | 13 | Audio, controller input, saves | ⏳ |
 | 14 | Speed: playable frame rate (also for Steam Deck) | ⏳ |
 
 ## What's next
 
-1. Test the instruction-fault fix (#33) and see how far the game's start-up gets.
+1. Find where XeFu's exception handler hangs (#34).
 2. Keep fixing whatever Xenia gaps the game's code runs into.
 3. Graphics is the next big unknown: XeFu turns the Xbox's NV2A commands into Xenos GPU work, which Xenia has to render.
 
