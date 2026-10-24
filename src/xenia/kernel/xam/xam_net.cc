@@ -256,6 +256,26 @@ dword_result_t XNetLogonGetMachineID_entry(lpqword_t machine_id_ptr) {
 }
 DECLARE_XAM_EXPORT1(XNetLogonGetMachineID, kNetworking, kStub);
 
+// Imported by the backward-compatibility emulator (xefu): with these
+// undefined, the call returned whatever was in r3 (its first argument).
+dword_result_t XNetLogonGetServiceNetworkID_entry(lpvoid_t unknown) {
+  // No Xbox Live service network: not signed in.
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XNetLogonGetServiceNetworkID, kNetworking, kStub);
+
+dword_result_t XNetLogonGetExtendedStatus_entry(lpdword_t status_ptr,
+                                                lpdword_t extended_ptr) {
+  if (status_ptr) {
+    *status_ptr = 0;
+  }
+  if (extended_ptr) {
+    *extended_ptr = 0;
+  }
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XNetLogonGetExtendedStatus, kNetworking, kStub);
+
 dword_result_t NetDll_XNetGetOpt_entry(dword_t one, dword_t option_id,
                                        lpvoid_t buffer_ptr,
                                        lpdword_t buffer_size) {

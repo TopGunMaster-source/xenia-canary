@@ -145,7 +145,11 @@ void RtlRaiseException_entry(pointer_t<X_EXCEPTION_RECORD> record) {
 
   // RtlRaiseException definitely wasn't a noreturn function, we can return
   // safe-ish
-  XELOGE("Guest attempted to trigger a breakpoint!");
+  XELOGE(
+      "RtlRaiseException: exception {:08X} at {:08X} (flags {:X}, {} "
+      "parameters) not dispatched; continuing",
+      uint32_t(record->code), uint32_t(record->exception_address),
+      uint32_t(record->exception_flags), uint32_t(record->number_parameters));
 }
 DECLARE_XBOXKRNL_EXPORT2(RtlRaiseException, kDebug, kStub, kImportant);
 

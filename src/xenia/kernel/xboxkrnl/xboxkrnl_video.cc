@@ -592,6 +592,16 @@ void RegisterVideoExports(xe::cpu::ExportResolver* export_resolver,
                                              10000);
 }
 
+// Display tweaks (colour profile, widescreen signalling) with no effect on
+// Xenia's output; imported by the backward-compatibility emulator (xefu).
+dword_result_t VdSetColorProfileAdjustment_entry(dword_t unk0, dword_t unk1) {
+  return 0;
+}
+DECLARE_XBOXKRNL_EXPORT1(VdSetColorProfileAdjustment, kVideo, kStub);
+
+dword_result_t VdSetWSSOption_entry(dword_t unk0, dword_t unk1) { return 0; }
+DECLARE_XBOXKRNL_EXPORT1(VdSetWSSOption, kVideo, kStub);
+
 }  // namespace xboxkrnl
 }  // namespace kernel
 }  // namespace xe

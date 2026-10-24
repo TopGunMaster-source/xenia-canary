@@ -1191,6 +1191,20 @@ dword_result_t XeKeysConsolePrivateKeySign_entry(
 }
 DECLARE_XBOXKRNL_EXPORT1(XeKeysConsolePrivateKeySign, kNone, kSketchy);
 
+// Checks data signed by a console (an original Xbox save carried over, for
+// the backward-compatibility emulator): Xenia has no console keys, so every
+// signature is accepted. Returns TRUE with *result = TRUE.
+dword_result_t XeKeysConsoleSignatureVerification_entry(lpvoid_t hash,
+                                                        lpvoid_t signature,
+                                                        lpdword_t result_ptr) {
+  XELOGW("XeKeysConsoleSignatureVerification: accepting the signature");
+  if (result_ptr) {
+    *result_ptr = 1;
+  }
+  return 1;
+}
+DECLARE_XBOXKRNL_EXPORT1(XeKeysConsoleSignatureVerification, kNone, kStub);
+
 }  // namespace xboxkrnl
 }  // namespace kernel
 }  // namespace xe

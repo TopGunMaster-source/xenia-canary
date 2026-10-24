@@ -127,6 +127,37 @@ dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
 }
 DECLARE_XBOXKRNL_EXPORT1(NtCreateFile, kFileSystem, kImplemented);
 
+// IoCreateFile is NtCreateFile with an extra options word (used by the
+// backward-compatibility emulator, xefu).
+dword_result_t IoCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
+                                  pointer_t<X_OBJECT_ATTRIBUTES> object_attrs,
+                                  pointer_t<X_IO_STATUS_BLOCK> io_status_block,
+                                  lpqword_t allocation_size_ptr,
+                                  dword_t file_attributes, dword_t share_access,
+                                  dword_t creation_disposition,
+                                  dword_t create_options, dword_t options) {
+  return NtCreateFile_entry(handle_out, desired_access, object_attrs,
+                            io_status_block, allocation_size_ptr,
+                            file_attributes, share_access, creation_disposition,
+                            create_options);
+}
+DECLARE_XBOXKRNL_EXPORT1(IoCreateFile, kFileSystem, kSketchy);
+
+// Content packages (STFS) as devices: not emulated. Fail cleanly instead of
+// leaving the call undefined (which returns the first argument).
+dword_result_t StfsCreateDevice_entry(lpvoid_t unk0, dword_t unk1) {
+  XELOGW("StfsCreateDevice: not implemented");
+  return X_STATUS_NOT_IMPLEMENTED;
+}
+DECLARE_XBOXKRNL_EXPORT1(StfsCreateDevice, kFileSystem, kStub);
+
+dword_result_t StfsControlDevice_entry(lpvoid_t unk0, dword_t unk1,
+                                       lpvoid_t unk2) {
+  XELOGW("StfsControlDevice: not implemented");
+  return X_STATUS_NOT_IMPLEMENTED;
+}
+DECLARE_XBOXKRNL_EXPORT1(StfsControlDevice, kFileSystem, kStub);
+
 dword_result_t NtOpenFile_entry(
     lpdword_t handle_out, dword_t desired_access,
     pointer_t<X_OBJECT_ATTRIBUTES> object_attributes,
