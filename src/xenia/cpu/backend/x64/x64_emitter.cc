@@ -432,14 +432,30 @@ uint64_t TrapDebugPrint(void* raw_context, uint64_t address) {
 }
 
 uint64_t TrapDebugBreak(void* raw_context, uint64_t address) {
-  auto thread_state =
-      reinterpret_cast<ppc::PPCContext_s*>(raw_context)->thread_state;
   auto ctx = reinterpret_cast<ppc::PPCContext_s*>(raw_context);
+  // Who got here: the guest call chain (back chain at 0(r1), the caller's LR
+  // saved at -8 of each caller frame), for finding which assertion fired.
+  std::string chain;
+  uint32_t sp = uint32_t(ctx->r[1]);
+  // Only Xenia's guest thread stacks (0x70000000+), which are always mapped.
+  auto on_stack = [](uint32_t a) {
+    return a >= 0x70000000u && a < 0x80000000u;
+  };
+  for (int n = 0; n < 8 && on_stack(sp); ++n) {
+    uint32_t back = xe::load_and_swap<uint32_t>(ctx->virtual_membase + sp);
+    if (!on_stack(back) || back <= sp || back - sp > 0x10000) {
+      break;
+    }
+    uint32_t saved_lr =
+        xe::load_and_swap<uint32_t>(ctx->virtual_membase + back - 8);
+    chain += fmt::format(" {:08X}", saved_lr);
+    sp = back;
+  }
   XELOGE(
-      "tw/td forced trap hit! This should be a crash! (lr {:08X} r3 {:08X} r4 "
-      "{:08X} r31 {:08X})",
-      uint32_t(ctx->lr), uint32_t(ctx->r[3]), uint32_t(ctx->r[4]),
-      uint32_t(ctx->r[31]));
+      "tw/td forced trap hit! This should be a crash! (lr {:08X} r1 {:08X} r3 "
+      "{:08X} r4 {:08X} r31 {:08X}; callers:{})",
+      uint32_t(ctx->lr), uint32_t(ctx->r[1]), uint32_t(ctx->r[3]),
+      uint32_t(ctx->r[4]), uint32_t(ctx->r[31]), chain);
   if (cvars::break_on_debugbreak) {
     xe::debugging::Break();
   }
