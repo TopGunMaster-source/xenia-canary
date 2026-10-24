@@ -146,7 +146,7 @@ int InstrEmit_branch(PPCHIRBuilder& f, const char* src, uint64_t cia,
         // mode's code uses, where returns are resolved as code: a return to
         // it goes back to the host. LR still holds it only if nothing on the
         // way here branched with link, so this frame is the one the host
-        // called (for other code, the same as the usual return check).
+        // called (for other code this matches the usual return check).
         Label* not_sentinel = f.NewLabel();
         f.BranchFalse(f.CompareEQ(f.Truncate(nia, INT32_TYPE),
                                   f.LoadConstantUint32(0xBCBCBCBC)),
