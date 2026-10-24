@@ -490,10 +490,16 @@ static uint32_t UnmapSmallUserPages(uint32_t page) {
   return count;
 }
 
+// The changed (C) bit of a page table entry.
+constexpr uint32_t kUserPteChanged = 0x80;
+
 static uint32_t PageMappingFromEntry(uint32_t entry, uint32_t physical) {
   switch (entry & 3) {
     case 2:
-      return physical | 2;
+      // Writable, but mapped read-only until the first write sets C (the
+      // write faults, TranslateUserAddress sets the bit, and the page is
+      // remapped writable).
+      return physical | ((entry & kUserPteChanged) ? 2 : 1);
     case 1:
     case 3:
       return physical | 1;
@@ -950,6 +956,7 @@ static bool TranslateUserAddress(uint32_t address, bool write,
   auto table = memory->TranslateVirtual<const uint8_t*>(g_user_page_table);
   uint32_t entry = UserSegmentEntry(address >> 24);
   uint32_t physical = 0;
+  uint8_t* entry_ptr = nullptr;
   if (entry) {
     physical = (entry & 0x1F000000u) | (address & 0x00FFFFFFu);
   } else {
@@ -960,16 +967,21 @@ static bool TranslateUserAddress(uint32_t address, bool write,
       return false;
     }
     auto entries =
-        memory->TranslatePhysical<const uint8_t*>(uint32_t(table_page) << 13);
-    entry = xe::load_and_swap<uint32_t>(
-        entries +
-        4 * (large ? (address >> 16) & 0x7FF : (address >> 12) & 0x7FF));
+        memory->TranslatePhysical<uint8_t*>(uint32_t(table_page) << 13);
+    entry_ptr = entries +
+                4 * (large ? (address >> 16) & 0x7FF : (address >> 12) & 0x7FF);
+    entry = xe::load_and_swap<uint32_t>(entry_ptr);
     uint32_t page_mask = large ? 0xFFFFu : 0xFFFu;
     physical = (entry & 0x1FFFFFFFu & ~page_mask) | (address & page_mask);
   }
   uint32_t pp = entry & 3;
   if (!entry || pp == 0 || (write && pp != 2)) {
     return false;
+  }
+  // A write sets the entry's changed (C) bit, as the 360's MMU does: xefu
+  // clears it on the Xbox's RAM and reads it back to find what was written.
+  if (write && entry_ptr && !(entry & kUserPteChanged)) {
+    xe::store_and_swap<uint32_t>(entry_ptr, entry | kUserPteChanged);
   }
   *physical_out = physical;
   return true;
