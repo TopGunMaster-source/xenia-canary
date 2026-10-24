@@ -431,6 +431,11 @@ class Pointer:
         return Pointer(self.offset + delta, self.size - delta,
                        f'{self.name}+{delta:#x}')
 
+    @property
+    def address(self):
+        """The guest address, for a pointer stored inside arena data."""
+        return ARENA + self.offset
+
 
 class Variable:
     def __init__(self, index, name):
