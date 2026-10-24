@@ -153,7 +153,8 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 
 ### 35. Start-up stops with XeFu retrying a fault 🔍 investigating
 * **Symptom:** after a long pass through the game's code section (the x86 EIP walks steadily from `0025xxxx` to the end of `.text` at `002CC200`, about 20,000 system calls), system calls stop and the same kind of page fault reaches XeFu about 33 times a second.
-* **Next step:** the heartbeat now records the latest fault (address, instruction, x86 EIP) and samples where the user-mode thread is.
+* **Found so far:** the stall follows a breakpoint in XeFu's C runtime `abort()` (`820C75E0`): XeFu's own code decided something is wrong and gave up. On a 360 that would stop XeFu too, so the real question is what Xenia did earlier that made XeFu's check fail. With breakpoints skipped, XeFu then carries on past the abort and ends up faulting on an unmapped stack page (`C4FF0690`), which is just a consequence.
+* **Next step:** about 30 places in XeFu call `abort()`. Xenia now logs the guest call chain at such a breakpoint (`6f56aab`), and shows XeFu's own debug messages, which should say which check failed.
 
 ---
 
