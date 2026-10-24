@@ -360,6 +360,7 @@ void SpirvShaderTranslator::Reset() {
   bisect_current_instruction_ = UINT32_MAX;
   bisect_snapshot_emitted_ = false;
   var_main_bisect_snapshot_ = spv::NoResult;
+  var_main_estimate_coefficients_.fill(spv::NoResult);
   var_main_registers_ = spv::NoResult;
   main_interpolators_unmodified_ = 0;
   var_main_interpolator_guest_center_deltas_.fill(spv::NoResult);
