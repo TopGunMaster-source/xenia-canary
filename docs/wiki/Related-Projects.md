@@ -17,3 +17,12 @@ Other work on the 360's backward compatibility (XeFu), and what it means for thi
 
 ## xemu, Cxbx-Reloaded
 * Original Xbox emulators. They run Burnout 3 directly, without XeFu; useful for comparing the game's own behaviour (what it does at start-up), not XeFu's.
+
+## Known issues outside Xenia (identified, not patched)
+Problems that come from Burnout 3 or XeFu themselves, so they aren't mistaken for Xenia bugs later.
+
+**XeFu (on a real 360).** Microsoft's notes for Xbox Originals list, for all titles: company logos at start-up can stutter, and extra content on the disc (trailers, demos) can misbehave and need a restart. No issue was listed for Burnout 3 itself. ([VidaExtra](https://www.vidaextra.com/fps/xbox-originals-con-algunos-problemas))
+
+**Burnout 3 itself (seen in xemu, an original Xbox emulator, so these are about the game's own demands):** stutter when driving into or out of overhead structures (tied to audio DSP), music much quieter than effects, black bars at the top of the screen, texture misalignment / lines on the road, laggy embedded videos and menus, and a freeze when launched from the original Xbox dashboard. Some of these are xemu's GPU/audio gaps, but they mark the parts of the game that stress an emulator: the audio DSP, signed texture filtering (`NV_PGRAPH_TEXFILTER_SIGNED`) and video playback. ([xemu compatibility page](https://xemu.app/titles/4541005b/))
+
+**What it means here:** once graphics and audio run, check those spots first (overhead structures, music volume, road textures, the intro videos), and compare against a real 360 rather than assuming a Xenia bug.
