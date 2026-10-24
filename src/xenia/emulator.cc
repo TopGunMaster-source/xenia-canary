@@ -1997,12 +1997,6 @@ bool Emulator::ExceptionCallback(Exception* ex) {
   }
 
   // Within range. Log the crash and suspend the faulting thread.
-  // Only pause the entire emulator if debugging is enabled.
-  if (cvars::debug) {
-    Pause();
-  }
-
-  // Dump information into the log.
   auto current_thread = kernel::XThread::GetCurrentThread();
   assert_not_null(current_thread);
 
@@ -2061,6 +2055,14 @@ bool Emulator::ExceptionCallback(Exception* ex) {
                     context->v[i].u32[2], context->v[i].u32[3]));
   }
   XELOGE("{}", crash_msg);
+  FlushLog();
+
+  // Only pause the entire emulator if debugging is enabled. After the dump,
+  // since Pause() can block (e.g. waiting on the GPU/audio systems).
+  if (cvars::debug) {
+    Pause();
+  }
+
   std::string crash_dlg = fmt::format(
       "The guest has crashed.\n\n"
       "Xenia has now paused itself.\n\n"
