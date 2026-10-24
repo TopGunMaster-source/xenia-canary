@@ -3091,14 +3091,33 @@ std::array<spv::Id, 2> SpirvShaderTranslator::FSI_ClampAndPackColor(
       std::array<spv::Id, 2> packed_16{const_uint_0_, const_uint_0_};
       id_vector_temp_.clear();
       id_vector_temp_.resize(4, builder_->makeFloatConstant(-32.0f));
-      spv::Id const_float4_minus_32 =
+      spv::Id const_float4_min =
           builder_->makeCompositeConstant(type_float4_, id_vector_temp_);
       id_vector_temp_.clear();
-      id_vector_temp_.resize(4, builder_->makeFloatConstant(32.0f));
-      spv::Id const_float4_32 =
+      id_vector_temp_.resize(4,
+                             builder_->makeFloatConstant(32767.0f / 1024.0f));
+      spv::Id const_float4_max =
           builder_->makeCompositeConstant(type_float4_, id_vector_temp_);
+      // NaN clamps by its sign like infinity, +NaN to 0x7FFF, -NaN to 0x8000.
       id_vector_temp_.clear();
-      // NaN to 0, not to -32.
+      id_vector_temp_.resize(4, builder_->makeUintConstant(UINT32_C(1) << 31));
+      spv::Id const_uint4_sign =
+          builder_->makeCompositeConstant(type_uint4_, id_vector_temp_);
+      id_vector_temp_.clear();
+      id_vector_temp_.resize(4, builder_->makeUintConstant(0x7F800000));
+      spv::Id const_uint4_infinity =
+          builder_->makeCompositeConstant(type_uint4_, id_vector_temp_);
+      id_vector_temp_.clear();
+      spv::Id color_signed_infinity = builder_->createUnaryOp(
+          spv::OpBitcast, type_float4_,
+          builder_->createBinOp(
+              spv::OpBitwiseOr, type_uint4_,
+              builder_->createBinOp(
+                  spv::OpBitwiseAnd, type_uint4_,
+                  builder_->createUnaryOp(spv::OpBitcast, type_uint4_,
+                                          color_float4),
+                  const_uint4_sign),
+              const_uint4_infinity));
       spv::Id color_scaled = builder_->createNoContractionBinOp(
           spv::OpVectorTimesScalar, type_float4_,
           builder_->createTriBuiltinCall(
@@ -3107,20 +3126,15 @@ std::array<spv::Id, 2> SpirvShaderTranslator::FSI_ClampAndPackColor(
                   spv::OpSelect, type_float4_,
                   builder_->createUnaryOp(spv::OpIsNan, type_bool4_,
                                           color_float4),
-                  const_float4_0_, color_float4),
-              const_float4_minus_32, const_float4_32),
-          builder_->makeFloatConstant(32767.0f / 32.0f));
-      id_vector_temp_.clear();
-      id_vector_temp_.resize(4, builder_->makeFloatConstant(-0.5f));
-      spv::Id unorm_round_offset_negative_float4 =
-          builder_->makeCompositeConstant(type_float4_, id_vector_temp_);
-      spv::Id color_offset = builder_->createNoContractionBinOp(
-          spv::OpFAdd, type_float4_, color_scaled,
-          builder_->createTriOp(
-              spv::OpSelect, type_float4_,
-              builder_->createBinOp(spv::OpFOrdLessThan, type_bool4_,
-                                    color_scaled, const_float4_0_),
-              unorm_round_offset_negative_float4, unorm_round_offset_float4));
+                  color_signed_infinity, color_float4),
+              const_float4_min, const_float4_max),
+          builder_->makeFloatConstant(1024.0f));
+      // Rounded half up (-0.5 packs to 0, -32 to 0x8000).
+      spv::Id color_offset = builder_->createUnaryBuiltinCall(
+          type_float4_, ext_inst_glsl_std_450_, GLSLstd450Floor,
+          builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_,
+                                             color_scaled,
+                                             unorm_round_offset_float4));
       spv::Id color_uint4 = builder_->createUnaryOp(
           spv::OpBitcast, type_uint4_,
           builder_->createUnaryOp(spv::OpConvertFToS, type_int4_,
@@ -3248,8 +3262,8 @@ std::array<spv::Id, 4> SpirvShaderTranslator::FSI_UnpackColor(
       unpacked_16[0][2] = const_float_0_;
       unpacked_16[0][3] = const_float_1_;
       spv::Id component_width = builder_->makeUintConstant(16);
-      spv::Id component_scale = builder_->makeFloatConstant(32.0f / 32767.0f);
-      spv::Id component_min = builder_->makeFloatConstant(-1.0f);
+      // 10 fractional bits. Keep negative values below -1.
+      spv::Id component_scale = builder_->makeFloatConstant(1.0f / 1024.0f);
       std::array<spv::Id, 2> color_packed_signed;
       for (uint32_t j = 0; j <= i; ++j) {
         color_packed_signed[j] =
@@ -3265,9 +3279,6 @@ std::array<spv::Id, 4> SpirvShaderTranslator::FSI_UnpackColor(
                                       builder_->makeUintConstant(16 * (j & 1)),
                                       component_width)),
             component_scale);
-        component = builder_->createBinBuiltinCall(
-            type_float_, ext_inst_glsl_std_450_, GLSLstd450FMax, component_min,
-            component);
         unpacked_16[i][j] = component;
       }
       unpacked = unpacked_16[i];

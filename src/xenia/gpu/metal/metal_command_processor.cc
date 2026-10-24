@@ -7077,6 +7077,9 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
   // Color exponent bias (matching Vulkan backend).
   for (uint32_t i = 0; i < 4; ++i) {
     int32_t color_exp_bias = color_infos[i].color_exp_bias;
+    float color_exp_bias_scale;
+    *reinterpret_cast<int32_t*>(&color_exp_bias_scale) =
+        UINT32_C(0x3F800000) + (color_exp_bias << 23);
     if (render_target_cache_->GetPath() ==
             RenderTargetCache::Path::kHostRenderTargets &&
         ((color_infos[i].color_format ==
@@ -7085,11 +7088,10 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
          (color_infos[i].color_format ==
               xenos::ColorRenderTargetFormat::k_16_16_16_16 &&
           !render_target_cache_->IsFixedRGBA16TruncatedToMinus1To1()))) {
-      color_exp_bias -= 5;
+      // Remap to -1...1 by scaling the output values by 1024/32767, so the
+      // SNORM bits are the EDRAM ones apart from -32.
+      color_exp_bias_scale *= 1024.0f / 32767.0f;
     }
-    float color_exp_bias_scale;
-    *reinterpret_cast<int32_t*>(&color_exp_bias_scale) =
-        UINT32_C(0x3F800000) + (color_exp_bias << 23);
     consts.color_exp_bias[i] = color_exp_bias_scale;
   }
 
