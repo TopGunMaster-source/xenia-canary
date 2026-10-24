@@ -118,8 +118,9 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
   if (out_pending) {
     *out_pending = false;
   }
-  if (byte_offset == uint64_t(-1)) {
-    // Read from current position.
+  // -1 (no offset given) and FILE_USE_FILE_POINTER_POSITION (-2) read from
+  // the file position; any other value, 0 included, is the offset to read at.
+  if (byte_offset == uint64_t(-1) || byte_offset == uint64_t(-2)) {
     byte_offset = position_;
   }
 
@@ -184,10 +185,7 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
                   buffer_guest_address, buffer_length, true, true);
             }
 
-            if (byte_offset) {
-              position_ = byte_offset;
-            }
-            position_ += bytes_read;
+            position_ = byte_offset + bytes_read;
           }
         }
       }
@@ -250,13 +248,12 @@ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
     }
 
     uint32_t bytes_read = 0;
-    result =
-        ReadInternal(read_buffer, read_length,
-                     byte_offset ? ((byte_offset != -1 && byte_offset != -2)
-                                        ? byte_offset + read_total
-                                        : byte_offset)
-                                 : -1,
-                     &bytes_read, apc_context, false, out_pending);
+    result = ReadInternal(
+        read_buffer, read_length,
+        (byte_offset != uint64_t(-1) && byte_offset != uint64_t(-2))
+            ? byte_offset + read_total
+            : byte_offset,
+        &bytes_read, apc_context, false, out_pending);
 
     if (result != X_STATUS_SUCCESS) {
       break;
@@ -289,7 +286,7 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
   if (out_pending) {
     *out_pending = false;
   }
-  if (byte_offset == uint64_t(-1)) {
+  if (byte_offset == uint64_t(-1) || byte_offset == uint64_t(-2)) {
     // Write from current position.
     byte_offset = position_;
   }
@@ -316,7 +313,7 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
                     result == X_STATUS_SUCCESS);
   }
   if (XSUCCEEDED(result)) {
-    position_ += bytes_written;
+    position_ = byte_offset + bytes_written;
   }
 
   XIOCompletion::IONotification notify;
