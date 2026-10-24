@@ -63,3 +63,5 @@ Suites:
 - `rb`, `blend`, `depth`, `zdepth`, `alpha`, `msaarb`: render target formats,
   blending, depth formats and polygon offset, alpha test and alpha to mask,
   MSAA samples and resolves.
+- `blend_products`: blending on the fixed point formats one product at a time,
+  each operand swept or held.
