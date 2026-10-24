@@ -140,11 +140,13 @@ int InstrEmit_branch(PPCHIRBuilder& f, const char* src, uint64_t cia,
     {
 #endif
       // Jump to pointer.
-      if (f.user_code() && !lk && !cond) {
-        // Xenia's own return address for code it runs from the host
-        // (Processor::Execute, 0xBCBCBCBC) lies in the user-code range, so a
-        // return to it from user-range code (which reaches here through tail
-        // jumps) must go back to the host, not be resolved as code there.
+      if (!lk && nia_is_lr && !cond) {
+        // Xenia's return address for code it calls from the host
+        // (Processor::Execute, 0xBCBCBCBC) lies in the range an emulated user
+        // mode's code uses, where returns are resolved as code: a return to
+        // it goes back to the host. LR still holds it only if nothing on the
+        // way here branched with link, so this frame is the one the host
+        // called (and for other code this is what the return check does).
         Label* not_sentinel = f.NewLabel();
         f.BranchFalse(f.CompareEQ(f.Truncate(nia, INT32_TYPE),
                                   f.LoadConstantUint32(0xBCBCBCBC)),
