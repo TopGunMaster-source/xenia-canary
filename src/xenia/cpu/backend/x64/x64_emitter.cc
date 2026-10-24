@@ -421,7 +421,7 @@ uint64_t TrapDebugPrint(void* raw_context, uint64_t address) {
   std::memcpy(string_tmp, str, str_length);
   string_tmp[str_length] = 0;
 
-  XELOGD("(DebugPrint) {}", string_tmp);
+  XELOGI("(DebugPrint) {}", string_tmp);
 
   if (cvars::debugprint_trap_log) {
     debugging::DebugPrint("(DebugPrint) {}", string_tmp);
@@ -434,7 +434,12 @@ uint64_t TrapDebugPrint(void* raw_context, uint64_t address) {
 uint64_t TrapDebugBreak(void* raw_context, uint64_t address) {
   auto thread_state =
       reinterpret_cast<ppc::PPCContext_s*>(raw_context)->thread_state;
-  XELOGE("tw/td forced trap hit! This should be a crash!");
+  auto ctx = reinterpret_cast<ppc::PPCContext_s*>(raw_context);
+  XELOGE(
+      "tw/td forced trap hit! This should be a crash! (lr {:08X} r3 {:08X} r4 "
+      "{:08X} r31 {:08X})",
+      uint32_t(ctx->lr), uint32_t(ctx->r[3]), uint32_t(ctx->r[4]),
+      uint32_t(ctx->r[31]));
   if (cvars::break_on_debugbreak) {
     xe::debugging::Break();
   }
