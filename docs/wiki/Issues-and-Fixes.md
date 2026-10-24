@@ -146,9 +146,14 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** `0xBCBCBCBC` is Xenia's own made-up return address for code it calls from the host (`Processor::Execute`). It happens to fall in the range Xenia reserves for XeFu's user-mode code (0xB0000000-0xBFFFFFFF), and code there is translated with every call turned into a jump (#10). So when XeFu's handler, called from the host, jumped into code in that range and that code returned, the return went to `BCBCBCBC` as if it were code, instead of back to Xenia.
 * **Fix:** a return to Xenia's sentinel address now always goes back to the host (`99e080a` covered only user-range code; the log of the next run showed XeFu's kernel-mode handler making the return, so the check now covers all returns: `c168783`). Confirmed: no more crash, and the game reaches its own code within seconds of starting. Along the way: Xenia now raises an instruction fault, as a 360 does, when user code branches to a page that isn't mapped (`5ab2107`, `6fa126e`, `f207622`).
 
-### 34. XeFu's exception handler never finishes 🔍 investigating
-* **Symptom:** with #33 fixed, the game runs its start-up code, then XeFu's exception handler (kernel-mode code at `82045FD8`, which Xenia calls for every user-mode fault, trap and system call) is entered and never returns. System calls, faults and the x86 EIP all stop; timers and interrupts keep running.
-* **Next step:** the heartbeat now samples the user-mode thread (suspends it briefly and maps its host position back to the XeFu code it is running), to show where the handler is stuck.
+### 34. A breakpoint in XeFu stopped Xenia 🔧
+* **Symptom:** with #33 fixed, XeFu's exception handler seemed to hang. It had actually hit a trap instruction meant as a debugger breakpoint, and Xenia (set to break on those by default) stopped the thread with an "Unhandled Exception: A breakpoint has been reached" dialog.
+* **What a 360 does:** a retail console has no debugger attached, so breakpoints are skipped and the code carries on.
+* **Fix:** test runs set `break_on_debugbreak = false`, which makes Xenia do the same. Confirmed: start-up continues well past that point. Xenia now also logs where such a trap is hit and shows guest debug messages at info level (`27b5b01`).
+
+### 35. Start-up stops with XeFu retrying a fault 🔍 investigating
+* **Symptom:** after a long pass through the game's code section (the x86 EIP walks steadily from `0025xxxx` to the end of `.text` at `002CC200`, about 20,000 system calls), system calls stop and the same kind of page fault reaches XeFu about 33 times a second.
+* **Next step:** the heartbeat now records the latest fault (address, instruction, x86 EIP) and samples where the user-mode thread is.
 
 ---
 

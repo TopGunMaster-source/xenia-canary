@@ -15,7 +15,7 @@
    * `log_file_max_mb` (default 2048) to keep logs from filling the disk
 4. Run Xenia with the disc image. A small `.bat` in each build's folder does that.
 
-* Builds are now tested from one reused folder, `test`, with `log_level = 2` and `log_file_max_mb = 512`, so test runs don't pile up on the disk. A crash leaves `xenia_crash.dmp`; the build's `xenia_canary_windows_pdb` artifact symbolizes it.
+* Builds are now tested from one reused folder, `test`, with `log_level = 2`, `log_file_max_mb = 350` (staging limit) and `break_on_debugbreak = false` (retail behaviour), so test runs don't pile up on the disk. A crash leaves `xenia_crash.dmp`; the build's `xenia_canary_windows_pdb` artifact symbolizes it.
 
 ## Reading a run
 

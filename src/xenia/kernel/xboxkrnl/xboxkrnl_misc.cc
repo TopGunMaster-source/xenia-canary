@@ -1440,6 +1440,9 @@ static void DescribeUserMapping(uint32_t address) {
 }
 
 static std::atomic<uint32_t> g_fault_logs{0};
+// The latest fault handed to xefu, for the heartbeat.
+static std::atomic<uint32_t> g_last_fault_iar{0}, g_last_fault_address{0},
+    g_last_fault_eip{0}, g_last_fault_write{0};
 
 // A fault in user code (taken in the host exception handler, below): hand
 // xefu an access violation record and the trap frame. Returns where to
@@ -1448,6 +1451,10 @@ static std::atomic<uint32_t> g_fault_logs{0};
     UserModeState* st, cpu::ppc::PPCContext* pc) {
   XEFU_PHASE();
   const UserModeFault& fault = st->fault;
+  g_last_fault_iar = fault.iar;
+  g_last_fault_address = fault.address;
+  g_last_fault_eip = uint32_t(pc->r[2]);
+  g_last_fault_write = fault.is_write ? 1 : 0;
   if (g_fault_logs.fetch_add(1) < 200) {
     XELOGI("BACKCOMPAT fault at {:08X}: {} {:08X} (x86 EIP {:08X})", fault.iar,
            fault.is_write ? "write" : "read", fault.address,
@@ -1738,6 +1745,13 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
                           state_word(0x2A0), state_word(-0x3FBC))
                   .c_str(),
               file);
+        fputs(
+            fmt::format("  last fault: {} {:08X} at {:08X} (x86 EIP {:08X})\n",
+                        g_last_fault_write.load() ? "write" : "read",
+                        g_last_fault_address.load(), g_last_fault_iar.load(),
+                        g_last_fault_eip.load())
+                .c_str(),
+            file);
         fputs(DescribeKernelTimers().c_str(), file);
 #if XE_USER_MODE_FAULTS
         fputs(SampleUserModeThread().c_str(), file);
