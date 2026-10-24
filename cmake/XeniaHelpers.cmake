@@ -133,10 +133,11 @@ endfunction()
 # Embeds every file in source_dir as a static byte array in a generated
 # embedded_<namespace>.{h,cc} pair. Symbol names mirror the filename with
 # '-' and '.' replaced by '_'. Generated files land in the build dir and
-# are added to target's sources / include path. Adding, removing or
-# changing an asset re-runs configure on the next build.
+# are added to target's sources / include path. Changing an asset re-runs
+# configure on the next build; adding or removing one needs a reconfigure, like
+# sources (no CONFIGURE_DEPENDS, which re-checks the glob on every build).
 function(xe_embed_binary_assets target source_dir output_namespace)
-  file(GLOB asset_files CONFIGURE_DEPENDS "${source_dir}/*")
+  file(GLOB asset_files "${source_dir}/*")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
       ${asset_files})
   set(header_path "${CMAKE_CURRENT_BINARY_DIR}/embedded_${output_namespace}.h")
