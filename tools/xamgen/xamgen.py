@@ -8,7 +8,8 @@ steps in order: it applies each step's arena patches, loads its arguments (the
 first eight into r3-r10, the rest into the stack slots from r1 + 0x50), calls
 the export through its import thunk, keeps r3, optionally waits for an
 XOVERLAPPED in the arena to stop pending, copies the arena ranges the step
-captures and saves r3 or arena words into variables later steps can pass.
+captures and saves r3, or the word or doubleword at an arena offset, into
+variables later steps can pass.
 
 When the steps are done it writes the results to cache:\\xamgen.bin, or to
 game:\\xamgen.bin where cache: isn't mounted (a console title without a utility
@@ -288,7 +289,8 @@ def executor(asm, thunk):
     a.b('capture')
     a.label('captures_done')
 
-    # Variables: index and source, r3 or the word at an arena offset.
+    # Variables: index, source (r3 or an arena offset) and the size read from
+    # the arena, a word or a doubleword.
     a.lwz(21, 0, 30)
     a.addi(30, 30, 4)
     a.label('store')
@@ -296,7 +298,8 @@ def executor(asm, thunk):
     a.beq('stores_done')
     a.lwz(4, 0, 30)
     a.lwz(5, 4, 30)
-    a.addi(30, 30, 8)
+    a.lwz(8, 8, 30)
+    a.addi(30, 30, 12)
     a.slwi(4, 4, 3)
     a.add(4, 27, 4)
     a.cmpwi(5, -1)
@@ -305,6 +308,12 @@ def executor(asm, thunk):
     a.b('stored')
     a.label('store_arena')
     a.add(5, 29, 5)
+    a.cmpwi(8, 8)
+    a.bne('store_word')
+    a.ld(6, 0, 5)
+    a.std(6, 0, 4)
+    a.b('stored')
+    a.label('store_word')
     a.lwz(6, 0, 5)
     a.li(7, 0)
     a.stw(7, 0, 4)
@@ -487,7 +496,8 @@ class Scenario:
              store=(), faults=False):
         """Calls `export` with `args`: ints, Pointers or Variables. `wait`
         is an XOVERLAPPED Pointer, `capture` the Pointers to record and
-        `store` (Variable, 'r3' or Pointer) pairs. A step that `faults` on a
+        `store` (Variable, 'r3' or Pointer) pairs, an 8-byte Pointer saving
+        a doubleword and any other its first word. A step that `faults` on a
         console is recorded as such and never run."""
         if len(args) > MAX_ARGS:
             raise ValueError(f'{export}: too many arguments')
@@ -582,8 +592,9 @@ def compile_corpus(corpus, imports):
             record += struct.pack('>I', len(step['store']))
             for variable, source in step['store']:
                 record += struct.pack(
-                    '>II', variable.index,
-                    FROM_R3 if source == 'r3' else source.offset)
+                    '>III', variable.index,
+                    FROM_R3 if source == 'r3' else source.offset,
+                    0 if source == 'r3' else 8 if source.size == 8 else 4)
             blob += record
             results_size += 16 + sum((p.size + 7) & ~7
                                      for p in step['capture'])
