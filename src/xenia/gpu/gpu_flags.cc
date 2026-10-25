@@ -300,3 +300,10 @@ DEFINE_bool(texture_point_snap, false,
             "Fixes texture seams in titles that use virtual textures, e.g. "
             "idTech 5, but may cause rendering issues in other titles.",
             "GPU");
+
+DEFINE_bool(texture_border_color_frac, true,
+            "Compute getBCF, the share of a texture fetch's footprint that "
+            "falls on the border. The Xbox backward compatibility emulator "
+            "uses it to apply border colors. Disabling it returns 0 and "
+            "texture borders come out black in original Xbox titles.",
+            "GPU");

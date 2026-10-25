@@ -643,15 +643,13 @@ VkImageView VulkanTextureCache::GetActiveBindingOrNullImageView(
     bool force_special_view =
         (dimension == xenos::FetchOpDimension::k2D &&
          binding->key.dimension == xenos::DataDimension::k3D);
-    bool signed_view =
-        texture_util::IsSignedViewBound(binding->swizzled_signs, is_signed);
 
     if (force_special_view) {
       // Get the appropriate texture for signed/unsigned.
       // Respect swizzled_signs from fetch constant, not just shader request.
       Texture* texture = nullptr;
       bool use_signed =
-          signed_view && texture_util::IsAnySignSigned(binding->swizzled_signs);
+          is_signed && texture_util::IsAnySignSigned(binding->swizzled_signs);
       if (use_signed && IsSignedVersionSeparateForFormat(binding->key)) {
         texture = binding->texture_signed;
       } else {
@@ -665,8 +663,8 @@ VkImageView VulkanTextureCache::GetActiveBindingOrNullImageView(
     } else {
       const VulkanTextureBinding& vulkan_binding =
           vulkan_texture_bindings_[fetch_constant_index];
-      image_view = signed_view ? vulkan_binding.image_view_signed
-                               : vulkan_binding.image_view_unsigned;
+      image_view = is_signed ? vulkan_binding.image_view_signed
+                             : vulkan_binding.image_view_unsigned;
     }
   }
   if (image_view != VK_NULL_HANDLE) {
@@ -700,12 +698,8 @@ VulkanTextureCache::SamplerParameters VulkanTextureCache::GetSamplerParameters(
   if (xenos::ClampModeUsesBorder(parameters.clamp_x) ||
       xenos::ClampModeUsesBorder(parameters.clamp_y) ||
       xenos::ClampModeUsesBorder(parameters.clamp_z)) {
-    if (binding.border_color_forced) {
-      parameters.border_color = binding.forced_border_color;
-    } else {
-      parameters.border_color = fetch.border_color;
-      parameters.force_bc_w_to_max = fetch.force_bc_w_to_max;
-    }
+    parameters.border_color = fetch.border_color;
+    parameters.force_bc_w_to_max = fetch.force_bc_w_to_max;
   } else {
     parameters.border_color = xenos::BorderColor::k_ABGR_Black;
   }
