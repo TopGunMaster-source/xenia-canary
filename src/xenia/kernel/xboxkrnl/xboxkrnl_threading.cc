@@ -1724,7 +1724,19 @@ uint32_t xeKeInsertQueueApc(XAPC* apc, uint32_t arg1, uint32_t arg2,
 dword_result_t KeInsertQueueApc_entry(pointer_t<XAPC> apc, lpvoid_t arg1,
                                       lpvoid_t arg2, dword_t priority_increment,
                                       const ppc_context_t& context) {
-  return xeKeInsertQueueApc(apc, arg1, arg2, priority_increment, context);
+  auto kpcr = context->TranslateVirtualGPR<X_KPCR*>(context->r[13]);
+  const bool kernel_apc_to_self =
+      apc->apc_mode == 0 &&
+      context->TranslateVirtual<X_KTHREAD*>(apc->thread_ptr) ==
+          context->TranslateVirtual(kpcr->prcb_data.current_thread);
+  uint32_t result =
+      xeKeInsertQueueApc(apc, arg1, arg2, priority_increment, context);
+  // Lowering IRQL as the APC lock is released runs a kernel APC queued to this
+  // thread.
+  if (result && kernel_apc_to_self) {
+    xeProcessKernelApcs(context);
+  }
+  return result;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeInsertQueueApc, kThreading, kImplemented);
 
