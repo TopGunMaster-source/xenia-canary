@@ -10,6 +10,7 @@ No Microsoft files are in this repository. XeFu, the Compatibility folder and th
 * **[[Issues and Fixes]]**: every problem hit so far: symptom, cause, fix and commit.
 * **[[How XeFu Works]]**: the parts of XeFu that Xenia has to provide.
 * **[[Testing Setup]]**: how a test is run and read.
+* **[[Mistakes and Lessons]]**: mistakes made along the way, why, and the rules that came out of them.
 
 ## Status in one paragraph (October 21, 2026)
 
