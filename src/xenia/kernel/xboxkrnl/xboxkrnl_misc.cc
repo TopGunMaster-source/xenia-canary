@@ -1735,6 +1735,8 @@ static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
 // stuck.
 static std::atomic<uint32_t> g_sweep_count{0};
 static std::atomic<uint32_t> g_timer_dpc_count{0};
+extern std::atomic<uint32_t> g_vdswap_count;
+extern std::atomic<uint32_t> g_vdswap_last_size;
 static std::atomic<cpu::ppc::PPCContext*> g_heartbeat_context{nullptr};
 
 static std::string DescribeKernelTimers();
@@ -1819,12 +1821,15 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
         cpu::Export* last_export = shim::g_traced_export.load();
         std::string line = fmt::format(
             "tick {} phase line {} last export {} ({}) EIP {:08X}, {} system "
-            "calls, {} faults, {} timer DPCs, {} interrupts raised\n",
+            "calls, {} faults, {} timer DPCs, {} interrupts raised, {} frames "
+            "swapped (last {}x{})\n",
             tick, g_phase.load(), last_export ? last_export->name : "none",
             shim::g_traced_export_returned.load() ? "returned" : "in it",
             pc ? uint32_t(pc->r[2]) : 0, g_syscall_logs.load(),
             g_fault_logs.load(), g_timer_dpc_count.load(),
-            g_interrupt_flags.load());
+            g_interrupt_flags.load(), g_vdswap_count.load(),
+            g_vdswap_last_size.load() >> 16,
+            g_vdswap_last_size.load() & 0xFFFF);
         fputs(line.c_str(), file);
         // xefu's state block (user 0xB7000000, physical 0x07000000): the
         // synchronous service request (+0x298 = -1 while waiting, +0x29C =

@@ -9,6 +9,8 @@
 
 #include "xenia/kernel/xboxkrnl/xboxkrnl_video.h"
 
+#include <atomic>
+
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
@@ -76,6 +78,10 @@ static std::pair<uint32_t, uint32_t> CalculateScaledAspectRatio(
 namespace xe {
 namespace kernel {
 namespace xboxkrnl {
+
+// Frames handed to the GPU, for xefu's heartbeat (xboxkrnl_misc.cc).
+std::atomic<uint32_t> g_vdswap_count{0};
+std::atomic<uint32_t> g_vdswap_last_size{0};
 
 bool IsWidescreen(KernelState* kernel_state, Resolution res) {
   if (res.is_widescreen()) {
@@ -505,6 +511,9 @@ void VdSwap_entry(
     return;
   }
   gpu_fetch.base_address = frontbuffer_physical_address >> 12;
+  g_vdswap_count.fetch_add(1, std::memory_order_relaxed);
+  g_vdswap_last_size.store((*width << 16) | (*height & 0xFFFF),
+                           std::memory_order_relaxed);
   XE_MAYBE_UNUSED
   auto texture_format = gpu::xenos::TextureFormat(texture_format_ptr.value());
   auto color_space = *color_space_ptr;
