@@ -11,6 +11,10 @@ XOVERLAPPED in the arena to stop pending, copies the arena ranges the step
 captures and saves r3, or the word or doubleword at an arena offset, into
 variables later steps can pass.
 
+A recorder is a routine a step passes where the system takes a callback, such
+as an APC's kernel routine. Each call counts itself in the recorder's arena
+log and, for the first calls it has room for, logs r3 onward, then returns 0.
+
 When the steps are done it writes the results to cache:\\xamgen.bin, or to
 game:\\xamgen.bin where cache: isn't mounted (a console title without a utility
 drive). It prints a summary with DbgPrint and stores DONE_MAGIC. Once the file
@@ -411,6 +415,26 @@ def write_results(a, thunk, name_offset, suffix):
     a.label(f'write_{suffix}_done')
 
 
+def recorder_routine(asm, recorder, index):
+    """Emits `recorder`'s routine, a leaf that keeps to volatile registers."""
+    a = asm
+    recorder.address = a.address()
+    a.load32(11, recorder.log.address)
+    a.lwz(12, 0, 11)
+    a.addi(0, 12, 1)
+    a.stw(0, 0, 11)
+    a.cmplwi(12, recorder.calls)
+    a.bge(f'recorder_{index}_full')
+    a.mulli(12, 12, 8 * recorder.args)
+    a.add(12, 12, 11)
+    for i in range(recorder.args):
+        a.std(3 + i, 8 + 8 * i, 12)
+    a.sync()
+    a.label(f'recorder_{index}_full')
+    a.li(3, 0)
+    a.blr()
+
+
 def control_page():
     page = bytearray(C_STEP_FORMAT + len(STEP_FORMAT))
     struct.pack_into('>q', page, C_FIRST_SLEEP, -3000 * 10000)
@@ -452,6 +476,17 @@ class Variable:
         self.name = name
 
 
+class Recorder:
+    """A callback whose `log` holds its call count and then `args`
+    doublewords from r3 for each of its first `calls` calls."""
+
+    def __init__(self, log, args, calls):
+        self.log = log
+        self.args = args
+        self.calls = calls
+        self.address = None
+
+
 class Scenario:
     def __init__(self, corpus, name, fill, console_only):
         self.corpus = corpus
@@ -462,6 +497,7 @@ class Scenario:
         self.initial = bytearray()
         self.pending = []
         self.steps = []
+        self.recorders = []
 
     def alloc(self, size, name, data=None, fill=None):
         """Lays out `size` bytes, 8-aligned, holding `data` and then `fill`
@@ -492,19 +528,29 @@ class Scenario:
     def variable(self, name):
         return self.corpus.variable(name)
 
+    def recorder(self, name, args=1, calls=1):
+        """A Recorder for up to 8 arguments, its log zeroed."""
+        if not 1 <= args <= 8:
+            raise ValueError(f'{self.name}: {name} records 1 to 8 arguments')
+        log = self.alloc(8 + 8 * args * calls, name, fill=0)
+        recorder = Recorder(log, args, calls)
+        self.recorders.append(recorder)
+        return recorder
+
     def call(self, export, *args, name=None, wait=None, capture=(),
-             store=(), faults=False):
-        """Calls `export` with `args`: ints, Pointers or Variables. `wait`
-        is an XOVERLAPPED Pointer, `capture` the Pointers to record and
-        `store` (Variable, 'r3' or Pointer) pairs, an 8-byte Pointer saving
-        a doubleword and any other its first word. A step that `faults` on a
-        console is recorded as such and never run."""
+             store=(), faults=False, void=False):
+        """Calls `export` with `args`: ints, Pointers, Variables or
+        Recorders. `wait` is an XOVERLAPPED Pointer, `capture` the Pointers
+        to record and `store` (Variable, 'r3' or Pointer) pairs, an 8-byte
+        Pointer saving a doubleword and any other its first word. A step that
+        `faults` on a console is recorded as such and never run. A `void`
+        export's r3 is whatever it left there, so it isn't recorded."""
         if len(args) > MAX_ARGS:
             raise ValueError(f'{export}: too many arguments')
         self.steps.append({
             'export': export, 'args': list(args), 'name': name or export,
             'wait': wait, 'capture': list(capture), 'store': list(store),
-            'patches': self.pending, 'faults': faults})
+            'patches': self.pending, 'faults': faults, 'void': void})
         if not faults:
             self.pending = []
 
@@ -539,6 +585,8 @@ def describe(value):
         return {'pointer': value.name, 'offset': value.offset}
     if isinstance(value, Variable):
         return {'variable': value.name}
+    if isinstance(value, Recorder):
+        return {'recorder': value.log.name}
     return {'value': value & 0xFFFFFFFFFFFFFFFF}
 
 
@@ -580,6 +628,9 @@ def compile_corpus(corpus, imports):
                     record += struct.pack('>III', TAG_ARENA, 0, arg.offset)
                 elif isinstance(arg, Variable):
                     record += struct.pack('>III', TAG_VARIABLE, 0, arg.index)
+                elif isinstance(arg, Recorder):
+                    record += struct.pack('>III', TAG_IMMEDIATE, 0,
+                                          arg.address)
                 else:
                     value = arg & 0xFFFFFFFFFFFFFFFF
                     record += struct.pack('>III', TAG_IMMEDIATE, value >> 32,
@@ -599,7 +650,7 @@ def compile_corpus(corpus, imports):
             results_size += 16 + sum((p.size + 7) & ~7
                                      for p in step['capture'])
             steps.append(dict(
-                description, wait=bool(wait),
+                description, wait=bool(wait), void=step['void'],
                 capture=[{'name': p.name, 'offset': p.offset,
                           'size': p.size} for p in step['capture']],
                 store=[{'variable': v.name,
@@ -617,6 +668,9 @@ def build(corpus, outdir):
         return imports.function(*exports[name])
 
     executor(asm, thunk)
+    recorders = [r for s in corpus.scenarios for r in s.recorders]
+    for index, recorder in enumerate(recorders):
+        recorder_routine(asm, recorder, index)
     text = asm.code()
     if CODE_BASE + len(text) > IMPORTS_BASE:
         raise ValueError('executor runs into the import records')
@@ -686,7 +740,9 @@ def decode(meta, data):
         r3, wait = struct.unpack_from('>QI', data, p)
         p += 16
         record = {'scenario': step['scenario'], 'name': step['name'],
-                  'export': step['export'], 'r3': f'{r3:016X}'}
+                  'export': step['export']}
+        if not step.get('void'):
+            record['r3'] = f'{r3:016X}'
         if step['wait']:
             record['wait_left'] = wait
         captures = {}

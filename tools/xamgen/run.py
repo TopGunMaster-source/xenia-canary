@@ -347,7 +347,8 @@ def normalize(results):
             out['faults'] = True
             steps.append(out)
             continue
-        out['r3'] = step['r3']
+        if 'r3' in step:
+            out['r3'] = step['r3']
         if 'wait_left' in step:
             out['completed'] = step['wait_left'] > 0
         capture = {}
