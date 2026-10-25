@@ -173,7 +173,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 ### 39. `mtfsb0`/`mtfsb1` weren't implemented 🧪
 * **Symptom:** with #38 fixed (`c071aff`), start-up went much further again: about 15,000 system calls and 21,000 faults, with the game's code reaching its USB (controller) driver. Then a breakpoint in Xenia's generated code stopped the main thread.
 * **Cause:** XeFu's translated code uses `mtfsb0` (clear one FPSCR bit, at `BA03EAAC`), which Xenia never implemented, so it emitted a breakpoint there. `mtfsb1` was missing too.
-* **Fix (`next commit`):** both instructions now set or clear the FPSCR bit, update the host rounding mode when it's a rounding bit, and copy FPSCR to CR1 for the record forms. Built, not yet tested. (A scan of XeFu's generated code found no other unimplemented instructions so far.)
+* **Fix (`ff4fae92f`):** both instructions now set or clear the FPSCR bit, update the host rounding mode when it's a rounding bit, and copy FPSCR to CR1 for the record forms. Built, not yet tested. (A scan of XeFu's generated code found no other unimplemented instructions so far.)
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
