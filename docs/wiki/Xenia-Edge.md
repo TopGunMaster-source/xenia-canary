@@ -37,3 +37,16 @@ RSA bignum division (#22), RC4 key size (#14), `MmLockAndMapSegmentArray` (#21),
 | `856ebcdb3` | User-mode context with `r1 == 0` gets part of the kernel stack | Not seen here yet; first suspect if user mode faults on its first call |
 | `b9fa366e5`, `02d8afd7e`, `7646f6e68` | User page table edge cases (missing 4 KB entry, entries over kernel allocations, entries with no frame) | Different memory code; compare if a user-mode address shows the wrong memory |
 | `0788c561e`, `723f54212` | Dropping translated code written through kernel addresses and run through user ones | Our sweep handling differs (#9); revisit for stale-code bugs |
+
+## Side-by-side test with the same files (October 25, 2026)
+
+Same game copy (Xbox Originals digital release, unpacked `default.xbe`; certificate allows only Xbox DVD and media board), same `xefu6.xex`/`xefutitle6.xex` from the console's backward-compatibility update, breakpoints off in both.
+
+| | Our fork (`f0a2442`, test disc) | Edge `3558152` (opens `default.xbe`, `xefu_launcher = xefu6.xex`) |
+|---|---|---|
+| XeFu boots its Xbox kernel, reads `default.xbe`, RSA check | passes | passes |
+| Media check: IOCTL `0x24080` on `D:` | answered (fix #23, `b104a8c`) | unhandled (`NtDeviceIoControlFile(0x24080) - unhandled IOCTL!`), then `0x335142` unhandled |
+| Result | game code keeps running (about 144,000 system calls in 100 s); black screen | XeFu gives up within a second (launch data `2, 2`) and returns to the dashboard |
+
+So with these files, Edge stops at the media check our fork already answers (shown in Edge's own log at `log_level = 3`). Edge's author reports Burnout 3 in game on `xefu6` with his own setup, which must pass that check some other way; how is unknown (a different game copy, or starting through an updated `xbox.xex`, are possibilities, not findings).
+
