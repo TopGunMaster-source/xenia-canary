@@ -1496,10 +1496,9 @@ static bool ProcessApcList(PPCContext* ctx, X_KTHREAD* current_thread,
   ctx->r[1] = old_stack_pointer - 32;
 
   while (!apc_queue.empty(ctx)) {
-    uint32_t apc_ptr = apc_queue.flink_ptr;
-
     XAPC* apc = apc_queue.ListEntryObject(
-        ctx->TranslateVirtual<X_LIST_ENTRY*>(apc_ptr));
+        ctx->TranslateVirtual<X_LIST_ENTRY*>(apc_queue.flink_ptr));
+    uint32_t apc_ptr = ctx->HostToGuestVirtual(apc);
 
     uint8_t* scratch_ptr = ctx->TranslateVirtual(scratch_address);
     xe::store_and_swap<uint32_t>(scratch_ptr + 0, apc->normal_routine);
