@@ -4,7 +4,7 @@ What we've learned about the 360's backward-compatibility emulator, and what Xen
 
 ## The big picture
 
-* XeFu is a 360 program (`xefu7.xex`, plus `xefutitle7.xex`, a per-title table) that emulates a whole original Xbox.
+* XeFu is a 360 program that emulates a whole original Xbox. It comes in several builds (`xefu.xex`, `xefu6.xex`, `xefu7.xex`, …, each with its `xefutitle` table); each approved game is assigned to one build, and `xbox.xex`, the 360's backward-compatibility launcher, starts the right one. Burnout 3's is `xefu6.xex`. What this wiki says about addresses (such as `82045848`) is from `xefu7.xex` and differs in other builds.
 * It runs a **real x86 Xbox kernel** (the `xb1krnl` resource, loaded at x86 address 0x80010000) through an **x86-to-PowerPC translator**.
 * The translated code runs in the 360's **user mode** with XeFu's own page tables. The 360 kernel calls behind this (`KeCreateUserMode`, `KeEnterUserMode`, TB flushes) are used by nothing else, so Xenia didn't have them.
 

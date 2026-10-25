@@ -4,7 +4,7 @@ Milestones in order. The numbers in brackets refer to [[Issues and Fixes]].
 
 | # | Milestone | Status |
 | --- | --- | --- |
-| 1 | XeFu (`xefu7.xex`) loads with its per-title table | ✅ [1, 2] |
+| 1 | XeFu (`xefu7.xex`) loads with its per-title table | ✅ [1, 2] (wrong build for Burnout 3, which uses `xefu6.xex`: see #40) |
 | 2 | XeFu enters user mode and runs translated x86 code | ✅ [3–11] |
 | 3 | The emulated Xbox's clock and interrupts work | ✅ [12, 13, 16, 17] |
 | 4 | The Xbox kernel passes its EEPROM check | ✅ [14, 15] |

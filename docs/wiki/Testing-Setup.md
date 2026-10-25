@@ -2,12 +2,20 @@
 
 ## What you need (from your own console)
 
-* XeFu's files from the hard drive's `Compatibility` folder: `config.bin`, `xbox.xex`, `xefu.xex`, `xefu7.xex`, `xefutitle7.xex`, `Dash\…`.
+* XeFu's files from the hard drive's `Compatibility` folder: `config.bin`, `xbox.xex`, all the `xefu*.xex` builds and their `xefutitle*.xex` tables, `Dash\…`.
+* **The right XeFu build for the game.** XeFu is not one program: the 360 has several builds (`xefu.xex`, `xefu6.xex`, `xefu7.xex`, …), and Microsoft assigned each approved game to one of them. On a console, `xbox.xex` looks the game up and starts its build; a build that isn't the game's hands back to `xbox.xex` (launch data `2, 2`). **Burnout 3 uses `xefu6.xex`** (per Xenia Edge's author, who runs it in game with that build; not yet checked against `xbox.xex`'s own list). Our copy of the Compatibility folder has no `xefu6.xex` yet.
 * The game: Burnout 3's Xbox Originals package, unpacked to its `default.xbe`.
+
+## Before every test (checklist)
+
+1. The XeFu build is the one the game is assigned to (see above), and the run says which build it used.
+2. The build of Xenia is the one meant: the log's first line (`Build: xefu-backcompat@…`) matches the commit.
+3. Nothing from an earlier run is still open or locking files.
+4. The setup is compared with how a real console does it before a failure is blamed on an emulator, ours or anyone else's.
 
 ## Steps
 
-1. Build a test disc image: the original Xbox disc (XDVDFS) plus `default.xex` = `xefu7.xex` and `xefutitle7.xex` at the root. Xenia mounts it as `\Device\Cdrom0` and starts XeFu, which then opens the game's `default.xbe`.
+1. Build a test disc image: the original Xbox disc (XDVDFS) plus `default.xex` = the game's XeFu build and its `xefutitle` table at the root. **Until October 25, 2026 every test used `xefu7.xex`, which is not Burnout 3's build** (see [[Issues and Fixes]] #40). Xenia mounts it as `\Device\Cdrom0` and starts XeFu, which then opens the game's `default.xbe`.
 2. Put the Compatibility files in a folder and set `compatibility_root` to it in `xenia-canary.config.toml`.
 3. For diagnosis runs, also set:
    * `log_level = 3`
