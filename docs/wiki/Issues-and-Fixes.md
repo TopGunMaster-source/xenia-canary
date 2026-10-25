@@ -175,20 +175,21 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** XeFu's translated code uses `mtfsb0` (clear one FPSCR bit, at `BA03EAAC`), which Xenia never implemented, so it emitted a breakpoint there. `mtfsb1` was missing too.
 * **Fix (`ff4fae92f`):** both instructions now set or clear the FPSCR bit, update the host rounding mode when it's a rounding bit, and copy FPSCR to CR1 for the record forms. Built, not yet tested. (A scan of XeFu's generated code found no other unimplemented instructions so far.)
 
-### 36. Fixes brought over from Xenia Edge 🧪
-* Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
+### 36. Fixes brought over from Xenia Edge ✅
+* Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. In every test build since `960bcb1`; their effect wasn't tested on its own.
 
 ---
 
 ## Problems with the test setup itself
 
 ### 40. Every test so far used the wrong XeFu build ❗
-* **What happened:** all our tests started `xefu7.xex`. Burnout 3 is assigned to `xefu6.xex` (Xenia Edge's author runs it in game with that build). A build that isn't the game's is expected to give up and hand back to `xbox.xex`; that is exactly what our Edge test showed, so the failure we reported in Edge's issue #319 came from our setup, not from Edge.
+* **What happened:** until October 25, 2026 all our tests started `xefu7.xex`. Burnout 3 is assigned to `xefu6.xex` ([ConsoleMods' compatibility list](https://consolemods.org/wiki/Xbox_360:Original_Xbox_Games_Compatibility_List); Xenia Edge's author also runs it in game with that build).
+* **What it did and didn't affect:** in our fork, `xefu6` got much further (the game's code keeps running) than `xefu7` (stalled at about 15,000 system calls). In Edge, the build made no difference with our files: with `xefu7` and with `xefu6` alike, XeFu gave up right after opening `D:`. With `xefu6` and detailed logging, Edge's log shows that step is the media check (IOCTL `0x24080`), which Edge doesn't answer and our fork does (#23); the `xefu7` run wasn't logged in detail, but stopped at the same step. So the Edge failure reported in Edge's issue #319 was real for our setup, but its cause was the unanswered media check, not the XeFu build; the logs that show it are on the [[Xenia Edge]] page. An early correction on this page had blamed the build for it; the side-by-side test with detailed logs showed otherwise.
 * **What it means for the fixes:** #31-#39 fixed things Xenia itself got wrong (crashes, wrong registers, missing instructions); those are real whatever build runs. But the later stalls seen with `xefu7` may come from running a build that doesn't support the game, so how far `xefu7` got says little about Burnout 3.
 * **Why it was missed:** the build-per-game assignment was known (the [[Xenia Edge]] page already said `xbox.xex` picks the whitelisted build) but never checked against the game before testing. The setup now has a checklist ([[Testing Setup]]).
 * **Found later:** `xefu6.xex` was already on the PC, in the backward-compatibility update copied from the console (`Back Compact\From BC update`); the test folder had been built from only part of that folder, and that folder wasn't searched when looking for it.
 * **First run on `xefu6` (October 25, 2026):** test disc `Burnout 3 - XeFu6 test.iso` (made by `Make XeFu6 Test Disc.exe`: the old disc with `default.xex` = `xefu6.xex` and `xefutitle6.xex`, SHA-1 `7154a87e…` and `827e41c0…`, read back and checked), Xenia `f0a2442`. XeFu ran without stalling or crashing for the whole run: about 144,000 system calls and 187,000 faults in 100 seconds and still climbing, with the game's code mostly at x86 `0030AD65` (its WMA audio decoder section) and the USB driver writing the USB controller (`FED00010`). The screen stayed black: nothing reaches Xenia's display yet. Next: why no picture (XeFu's graphics path into Xenia).
-* **Next:** use the complete update set (including the `xbox.xexp`/`xefu.xexp` patches), then run Burnout 3 through `xefu6.xex`, ideally started by `xbox.xex` as on a console.
+* **Next:** booting through an up-to-date `xbox.xex` (the update's `xbox.xexp` patch applied), as a console does; and the black screen.
 
 ### 27. Old Xenia processes locked the exe 🔧
 * Frozen test runs kept `xenia_canary.exe` locked. Workaround: every build runs from its own folder (`run2`, `run3`, …).

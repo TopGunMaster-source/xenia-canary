@@ -7,7 +7,7 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 ### 1. Every test used the wrong XeFu build
 * **What:** all tests ran Burnout 3 on `xefu7.xex`. Microsoft assigned Burnout 3 to `xefu6.xex`. See [[Issues and Fixes]] #40.
 * **Cost:** days of testing on a build that isn't the game's. Later stalls with `xefu7` may mean nothing for Burnout 3, and a public comment (below) was wrong because of it. The Xenia fixes themselves (#31-#39) remain valid.
-* **Why:** the starting setup was never questioned once it was built. The wiki already said `xbox.xex` picks a build per game, and in the Edge test `xefu7` handed back to `xbox.xex` (what a build does with a game that isn't its own), but neither was followed up.
+* **Why:** the starting setup was never questioned once it was built. The wiki already said `xbox.xex` picks a build per game, but it wasn't checked against the game.
 * **Rule:** check the foundations (which build, which files, from where) before building on them, and write them down per test ([[Testing Setup]] checklist).
 
 ### 2. Said `xefu6.xex` wasn't on the PC without searching everywhere
@@ -23,8 +23,8 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Rule:** copy a real configuration whole, then remove things on purpose, never the other way round.
 
 ### 4. Helped post a wrong claim publicly
-* **What:** the reply drafted for Xenia Edge's issue #319 said Burnout 3 fails in Edge and gets further in our fork. Edge's author pointed out the test used the wrong XeFu build.
-* **Cost:** the claim had to be corrected publicly.
+* **What:** the reply drafted for Xenia Edge's issue #319 said Burnout 3 fails in Edge and gets further in our fork, from a test on the wrong XeFu build and without detailed logs. A later side-by-side test with `xefu6` and detailed logs showed the Edge failure was real for our files, caused by an unanswered media check, not by the build; but that wasn't known when it was posted.
+* **Cost:** a follow-up was needed to explain what was actually happening.
 * **Why:** a surprising result ("we're ahead") was treated as a win, not as something to explain, and it went public unchecked.
 * **Rule:** anything posted in the owner's name is checked against its evidence first, and surprising results are investigated before they're claimed.
 
