@@ -192,6 +192,12 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Edge with the media check answered (October 25, 2026):** Edge `3558152` plus only the `0x24080` answer (`05c1080`), same files with `xefu6`: Burnout 3 boots and is playable, in slow motion throughout (also at `log_level = 2`). Details on [[Xenia Edge]].
 * **Next:** booting through an up-to-date `xbox.xex` (the update's `xbox.xexp` patch applied), as a console does; and the black screen.
 
+### 41. XeFu's handler stops returning after the game is loaded (xefu6) 🧪
+* **Symptom:** with `728e6d03f` and the xefu6 test disc, three runs in a row (October 25, 2026) stop at the same point: XeFu loads the game's sections (memory faults writing `0x455000`-`0x48B000`), hashes them, calls `KeFlushCurrentEntireTb`, and then its handler on the main thread never returns. That thread keeps entering and leaving one critical section (about 20,000 times a second); no more Xbox system calls or faults (stuck at about 5,300 and 939). Timers, interrupts and other threads keep going. One frame (640x480) is swapped before this, then none; the screen is black.
+* **Not the cause:** the saved instruction-info cache (`cache_host/modules/.../executable_addr_flags.bin`): reset to empty, the run stopped at the same point.
+* **Open question:** an earlier run with `f0a2442` on the same disc got past this point into the game's code; what was different isn't known (its full log wasn't kept). Xenia Edge passes this point with the same `xefu6`, started from `default.xbe`.
+* **Next:** find what the handler's loop waits for, and run Edge with our test disc so both start from identical inputs.
+
 ### 27. Old Xenia processes locked the exe 🔧
 * Frozen test runs kept `xenia_canary.exe` locked. Workaround: every build runs from its own folder (`run2`, `run3`, …).
 

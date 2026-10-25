@@ -89,6 +89,11 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **What:** a changed config sent under a file name used before arrived as the old version, though the copy reported success. Caught by reading the file back.
 * **Rule:** every file sent to the PC gets a new name, and every write is read back and checked.
 
+### 18. Read handler-time registers as the x86 state
+* **What:** a run that stopped early was reported as "the emulated Xbox's stack pointer points at code". The values came from the heartbeat, which reads `r2`/`r7` (XeFu's x86 EIP/ESP) and a trace of `r2` values; while XeFu's handler runs those registers hold kernel values, not x86 ones. A follow-up guess (a cache file of return sites) was also tested and was wrong.
+* **Cost:** two wrong explanations given before being checked; one test run on the cache guess.
+* **Rule:** before reading meaning into a diagnostic, check in the code where its numbers come from and in which state they're valid.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
