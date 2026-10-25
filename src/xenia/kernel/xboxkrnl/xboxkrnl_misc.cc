@@ -855,9 +855,18 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   std::memcpy(&st->user_regs, pc, sizeof(*pc));
   WriteFrame(st, iar);
 
-  // Run the handler as kernel code: kernel registers and memory view.
+  // Run the handler as kernel code: kernel registers and memory view. As on
+  // the 360, the trap frame holds the user's volatile registers while the
+  // non-volatile ones (r14-r31, f14-f31) stay live through the handler: xefu
+  // saves them into the frame itself where it needs them (xefu7 82107448,
+  // 821074F0), edits them there and loads them back before returning, and
+  // they hold the emulated x86 registers.
   uint64_t kernel_r1 = st->kernel_regs.r[1];
   std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
+  for (int n = 14; n < 32; ++n) {
+    pc->r[n] = st->user_regs.r[n];
+    pc->f[n] = st->user_regs.f[n];
+  }
   pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
   // The word below the handler's stack pointer is where the console's
   // dispatcher leaves its return address: xefu's one-shot handler (82045848
@@ -896,9 +905,20 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   CheckStackpointsAfterCall(pc, stack_depth, "xefu's user-mode handler");
   XEFU_PHASE();
 
-  // Back to user mode with whatever the handler left in the frame.
+  // Back to user mode with whatever the handler left in the frame, and the
+  // non-volatile registers as the handler left them live.
+  uint64_t live_gpr[18];
+  double live_fpr[18];
+  for (int n = 14; n < 32; ++n) {
+    live_gpr[n - 14] = pc->r[n];
+    live_fpr[n - 14] = pc->f[n];
+  }
   std::memcpy(pc, &st->user_regs, sizeof(*pc));
   uint32_t resume = ReadFrame(st, pc);
+  for (int n = 14; n < 32; ++n) {
+    pc->r[n] = live_gpr[n - 14];
+    pc->f[n] = live_fpr[n - 14];
+  }
   pc->virtual_membase = g_alias_base;
   return resume;
 }

@@ -151,7 +151,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **What a 360 does:** a retail console has no debugger attached, so breakpoints are skipped and the code carries on.
 * **Fix:** test runs set `break_on_debugbreak = false`, which makes Xenia do the same. Confirmed: start-up continues well past that point. Xenia now also logs where such a trap is hit and shows guest debug messages at info level (`27b5b01`).
 
-### 35. Start-up stops with XeFu retrying a fault 🧪
+### 35. Start-up stops with XeFu retrying a fault ✅
 * **Symptom:** after a long pass through the game's code section (the x86 EIP walks steadily from `0025xxxx` to the end of `.text` at `002CC200`, about 20,000 system calls), system calls stop and the same kind of page fault reaches XeFu about 33 times a second. The log shows about 2,000 "forced trap" breakpoints on the main thread.
 * **Not `abort()` after all:** an earlier guess blamed XeFu's C runtime `abort()`. Logging the exact address of each breakpoint (`2cbc103`) showed every one is at `82045864`, a zero word right after a call in XeFu's *one-shot* user-mode exception handler (`82045848`). That isn't a real breakpoint; it's Xenia running into data.
 * **Cause:** at some points XeFu swaps its user-mode exception handler for a one-shot one. That handler calls a helper that saves the registers into the trap frame, runs the real handling, and then returns through the word its *caller* left just below the stack pointer, skipping the handler's own frame. It never expects to come back to the handler. Xenia called the handler with nothing meaningful in that word. Its return also only ever went back one frame, so it landed in the handler, on the zero word after the call.
@@ -159,6 +159,11 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Test of `e698ff2`:** the breakpoints were gone and start-up got further (about 6,900 system calls, up from 6,600), then XeFu's main thread went quiet. Xenia lowers r1 by 176 bytes when it calls guest code, so the return address went in the wrong word.
 * **Test of `3de766a`** (return address in the right word): the return was taken, but the search for the frame to return from picked the main thread's very first frame, so the whole thread ended. The handler's own frame record doesn't show the host return address by the time XeFu returns.
 * **Fix (`55f747754`):** the handler call now records where it was made (like the restart point for user-mode faults). A return to the host address while a handler is running goes straight back there and restores the stack records, whatever happened to them in between. Built, not yet tested.
+
+### 37. XeFu's handler got the kernel's non-volatile registers instead of the x86 ones 🧪
+* **Symptom:** with #35 fixed (`1e02228`: the one-shot handler now returns properly, and the main thread survives), start-up ran until the game's Direct3D code first wrote to the Xbox GPU's interrupt registers (`0xFD600140`, `0xFD009140`). Right after that the x86 code jumped to address 0, and its stack pointer held `C4FF0690`, a value from the 360 side, not the Xbox.
+* **Cause:** on the 360, the kernel saves only the volatile registers in the trap frame and calls the handler with r14-r31 (and f14-f31) still holding the user's values. XeFu keeps x86 registers in those. Its handlers that emulate an instruction (such as a GPU register write) copy r14-r31 into the frame, edit them there, and load them back. Xenia called the handler with *all* registers set to the kernel's, so XeFu copied the kernel's r14-r31 into the frame and handed them back to the x86 code.
+* **Fix (`next commit`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Built, not yet tested.
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
