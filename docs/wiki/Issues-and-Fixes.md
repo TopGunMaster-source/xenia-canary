@@ -168,7 +168,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 ### 38. Xenia crashed when XeFu's code branched to address 0 🧪
 * **Symptom:** with #37 fixed (`c695c83`), start-up went much further: the game's own x86 code ran (EIP `001B9090`, with a proper Xbox stack), about 7,500 system calls and 14,000 faults. Then Xenia stopped with an "unhandled exception" (an access violation in its own code, found with the crash dump and the build's symbols).
 * **Cause:** XeFu's translated code branched to address `0`. On a 360, user code branching to an unmapped address takes an instruction fault, and XeFu handles it, probably by translating the missing block. Xenia only raised that fault for branches into its user-code range (`0xB0000000`-`0xBFFFFFFF`). For address 0 it tried to translate PowerPC code there, failed, and dereferenced the missing result.
-* **Fix (`next commit`):** user-mode branches below `0x80000000` with no translated code now go through the same instruction-fault path. Built, not yet tested.
+* **Fix (`b4b733f8b`):** user-mode branches below `0x80000000` with no translated code now go through the same instruction-fault path. Built, not yet tested.
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
