@@ -165,10 +165,15 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Cause:** on the 360, the kernel saves only the volatile registers in the trap frame and calls the handler with r14-r31 (and f14-f31) still holding the user's values. XeFu keeps x86 registers in those. Its handlers that emulate an instruction (such as a GPU register write) copy r14-r31 into the frame, edit them there, and load them back. Xenia called the handler with *all* registers set to the kernel's, so XeFu copied the kernel's r14-r31 into the frame and handed them back to the x86 code.
 * **Fix (`50c5944e0`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Confirmed in the test of `c695c83`: the game's own code ran on (see #38).
 
-### 38. Xenia crashed when XeFu's code branched to address 0 🧪
+### 38. Xenia crashed when XeFu's code branched to address 0 ✅
 * **Symptom:** with #37 fixed (`c695c83`), start-up went much further: the game's own x86 code ran (EIP `001B9090`, with a proper Xbox stack), about 7,500 system calls and 14,000 faults. Then Xenia stopped with an "unhandled exception" (an access violation in its own code, found with the crash dump and the build's symbols).
 * **Cause:** XeFu's translated code branched to address `0`. On a 360, user code branching to an unmapped address takes an instruction fault, and XeFu handles it, probably by translating the missing block. Xenia only raised that fault for branches into its user-code range (`0xB0000000`-`0xBFFFFFFF`). For address 0 it tried to translate PowerPC code there, failed, and dereferenced the missing result.
-* **Fix (`b4b733f8b`):** user-mode branches below `0x80000000` with no translated code now go through the same instruction-fault path. Built, not yet tested.
+* **Fix (`b4b733f8b`):** user-mode branches below `0x80000000` with no translated code now go through the same instruction-fault path. Confirmed in the test of `c071aff`: XeFu handled those faults and carried on (see #39).
+
+### 39. `mtfsb0`/`mtfsb1` weren't implemented 🧪
+* **Symptom:** with #38 fixed (`c071aff`), start-up went much further again: about 15,000 system calls and 21,000 faults, with the game's code reaching its USB (controller) driver. Then a breakpoint in Xenia's generated code stopped the main thread.
+* **Cause:** XeFu's translated code uses `mtfsb0` (clear one FPSCR bit, at `BA03EAAC`), which Xenia never implemented, so it emitted a breakpoint there. `mtfsb1` was missing too.
+* **Fix (`next commit`):** both instructions now set or clear the FPSCR bit, update the host rounding mode when it's a rounding bit, and copy FPSCR to CR1 for the record forms. Built, not yet tested. (A scan of XeFu's generated code found no other unimplemented instructions so far.)
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.

@@ -406,14 +406,29 @@ int InstrEmit_mffsx(PPCHIRBuilder& f, const InstrData& i) {
   return 0;
 }
 
+// FPSCR[crbD] <- 0 or 1 (bit 0 is the most significant).
+static int EmitMtfsb(PPCHIRBuilder& f, const InstrData& i, bool set) {
+  uint32_t mask = 1u << (31 - i.X.RT);
+  Value* fpscr = f.LoadFPSCR();
+  fpscr = set ? f.Or(fpscr, f.LoadConstantInt32(int32_t(mask)))
+              : f.And(fpscr, f.LoadConstantInt32(int32_t(~mask)));
+  f.StoreFPSCR(fpscr);
+  // NI and RN (bits 29-31) set the host rounding mode.
+  if (mask & 0x7) {
+    f.SetRoundingMode(f.And(fpscr, f.LoadConstantInt32(7)));
+  }
+  if (i.X.Rc) {
+    f.CopyFPSCRToCR1();
+  }
+  return 0;
+}
+
 int InstrEmit_mtfsb0x(PPCHIRBuilder& f, const InstrData& i) {
-  XEINSTRNOTIMPLEMENTED();
-  return 1;
+  return EmitMtfsb(f, i, false);
 }
 
 int InstrEmit_mtfsb1x(PPCHIRBuilder& f, const InstrData& i) {
-  XEINSTRNOTIMPLEMENTED();
-  return 1;
+  return EmitMtfsb(f, i, true);
 }
 
 int InstrEmit_mtfsfx(PPCHIRBuilder& f, const InstrData& i) {
