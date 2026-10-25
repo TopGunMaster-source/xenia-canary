@@ -186,7 +186,8 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **What happened:** all our tests started `xefu7.xex`. Burnout 3 is assigned to `xefu6.xex` (Xenia Edge's author runs it in game with that build). A build that isn't the game's is expected to give up and hand back to `xbox.xex`; that is exactly what our Edge test showed, so the failure we reported in Edge's issue #319 came from our setup, not from Edge.
 * **What it means for the fixes:** #31-#39 fixed things Xenia itself got wrong (crashes, wrong registers, missing instructions); those are real whatever build runs. But the later stalls seen with `xefu7` may come from running a build that doesn't support the game, so how far `xefu7` got says little about Burnout 3.
 * **Why it was missed:** the build-per-game assignment was known (the [[Xenia Edge]] page already said `xbox.xex` picks the whitelisted build) but never checked against the game before testing. The setup now has a checklist ([[Testing Setup]]).
-* **Next:** copy `xefu6.xex` (and the other `xefu*.xex` builds) from the console's Compatibility folder, then run Burnout 3 through `xefu6.xex`, ideally started by `xbox.xex` as on a console.
+* **Found later:** `xefu6.xex` was already on the PC, in the backward-compatibility update copied from the console (`Back Compact\From BC update`); the test folder had been built from only part of that folder, and that folder wasn't searched when looking for it.
+* **Next:** use the complete update set (including the `xbox.xexp`/`xefu.xexp` patches), then run Burnout 3 through `xefu6.xex`, ideally started by `xbox.xex` as on a console.
 
 ### 27. Old Xenia processes locked the exe 🔧
 * Frozen test runs kept `xenia_canary.exe` locked. Workaround: every build runs from its own folder (`run2`, `run3`, …).
