@@ -27,3 +27,22 @@ What we've learned about the 360's backward-compatibility emulator, and what Xen
 5. *(next)* Jump to the game's entry point.
 
 If any step fails, the Xbox kernel returns to the dashboard (`sc 0x10` at x86 `80024627`). XeFu then exits to `X:\xbox.xex`, the 360's backward-compatibility launcher.
+
+## XeFu builds
+
+Public details, from [ConsoleMods](https://consolemods.org/wiki/Xbox_360:Xenon_Fusion_Emulator) and its [compatibility list](https://consolemods.org/wiki/Xbox_360:Original_Xbox_Games_Compatibility_List):
+
+| File | Built | Title table |
+|---|---|---|
+| `xefu.xex` | 2005-09-14 | none |
+| `xefu2.xex` | 2006-02-08 | none |
+| `xefu3.xex` | 2006-03-31 | none |
+| `xefu5.xex` | 2006-08-31 | `xefutitle5.xex` |
+| `xefu1_1.xex` | 2006-10-19 | none |
+| `xefu6.xex` | 2006-12-11 | `xefutitle6.xex` |
+| `xefu7.xex`, `xefu7b.xex` | 2007-11-26 | `xefutitle7.xex`, `xefutitle7b.xex` |
+
+* Officially supported games name the build to use; others use the latest. On the console they live in the hard drive's system partition (`xbox.xex`'s own header names `\Device\Harddisk0\SystemPartition\Compatibility\xbox.xex`); the main partition's `Compatibility\Xbox1` holds original Xbox saves and content.
+* **Burnout 3: Takedown** is listed as supported on `xefu6` (and playable on the Xbox One build `xefu2021c`); untested on the others. Game rips missing data freeze on load.
+* Our copy (checked October 25, 2026): `xbox.xex` and `xefu.xex` are the 2005 versions (`xefu.xex` matches ConsoleMods' SHA-1). `xefu7.xex` has the 2007 build date but a different SHA-1 from the one ConsoleMods lists, and `xefutitle7.xex` is dated 2018 and also differs. There is no `xefu6.xex`. See [[Issues and Fixes]] #40.
+
