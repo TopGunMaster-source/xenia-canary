@@ -1,9 +1,11 @@
-"""IoCreateFile corpus: a plain open, and opens of a path's target directory,
-which open the directory holding the last component and say whether that
-exists. Everything is under game:\\krnlgen, which the first scenario makes.
+"""File corpus: a plain open, opens of a path's target directory, which open
+the directory holding the last component and say whether that exists, failed
+opens and a file's basic information. Everything is under game:\\krnlgen,
+which the first scenario makes.
 
 The target directory's handle is checked through its attributes. A failed
-open's handle is captured instead of closed.
+open's handle is captured instead of closed. Basic information is captured
+from its attributes on, the times being the host's.
 """
 
 import struct
@@ -13,6 +15,8 @@ OBJ_CASE_INSENSITIVE = 0x40
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 SYNCHRONIZE = 0x00100000
+FILE_WRITE_ATTRIBUTES = 0x100
+FILE_ATTRIBUTE_READONLY = 0x1
 FILE_ATTRIBUTE_DIRECTORY = 0x10
 FILE_ATTRIBUTE_NORMAL = 0x80
 FILE_SHARE_READ_WRITE = 3
@@ -24,6 +28,10 @@ FILE_DIRECTORY_FILE = 0x1
 FILE_SYNCHRONOUS_IO_NONALERT = 0x20
 FILE_NON_DIRECTORY_FILE = 0x40
 OPEN_TARGET_DIRECTORY = 0x4
+FILE_BASIC_INFORMATION = 4
+BASIC_INFORMATION_SIZE = 0x28
+FILE_POSITION_INFORMATION = 14
+FILE_END_OF_FILE_INFORMATION = 20
 FILE_NETWORK_OPEN_INFORMATION = 34
 NETWORK_OPEN_INFORMATION_SIZE = 0x38
 
@@ -67,6 +75,29 @@ def query_attributes(s, handle):
     s.call('NtQueryInformationFile', handle, iosb, info,
            NETWORK_OPEN_INFORMATION_SIZE, FILE_NETWORK_OPEN_INFORMATION,
            capture=[iosb, info + 0x30])
+
+
+def query_basic(s, handle, length=BASIC_INFORMATION_SIZE):
+    iosb = s.alloc(8, 'query iosb')
+    info = s.alloc(BASIC_INFORMATION_SIZE, 'basic information')
+    s.call('NtQueryInformationFile', handle, iosb, info, length,
+           FILE_BASIC_INFORMATION, capture=[iosb, info + 0x20])
+
+
+def set_information(s, handle, info_class, data, name):
+    iosb = s.alloc(8, 'set iosb')
+    info = s.alloc(len(data), 'information', data)
+    s.call('NtSetInformationFile', handle, iosb, info, len(data), info_class,
+           capture=[iosb], name=name)
+
+
+def set_basic(s, handle, file_attributes, at=0x20):
+    """Sets only the attributes, the times left 0, putting them in the word
+    at +0x20 or +0x24 with the other 0."""
+    data = bytearray(BASIC_INFORMATION_SIZE)
+    struct.pack_into('>I', data, at, file_attributes)
+    set_information(s, handle, FILE_BASIC_INFORMATION, bytes(data),
+                    f'set attributes {file_attributes:#x} at {at:#x}')
 
 
 def target_directory(s, path):
@@ -116,6 +147,47 @@ def build(corpus):
         create(corpus.scenario(name), path, GENERIC_READ | SYNCHRONIZE, 0,
                disposition, create_options | FILE_SYNCHRONOUS_IO_NONALERT,
                capture_handle=True)
+
+    for name, path, create_options in (
+            ('basic information of file', FILE, FILE_NON_DIRECTORY_FILE),
+            ('basic information of directory', ROOT, FILE_DIRECTORY_FILE)):
+        s = corpus.scenario(name)
+        handle = create(s, path, GENERIC_READ | SYNCHRONIZE, 0, FILE_OPEN,
+                        create_options | FILE_SYNCHRONOUS_IO_NONALERT)
+        query_basic(s, handle)
+        s.call('NtClose', handle)
+
+    s = corpus.scenario('basic information short buffer')
+    handle = create(s, FILE, GENERIC_READ | SYNCHRONIZE, 0, FILE_OPEN,
+                    FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT)
+    query_basic(s, handle, BASIC_INFORMATION_SIZE - 4)
+    s.call('NtClose', handle)
+
+    # A file of its own, opened for its attributes only so a read-only one
+    # left by an earlier run still opens. It ends normal again.
+    s = corpus.scenario('set basic information')
+    handle = create(s, ROOT + '\\attributes',
+                    GENERIC_READ | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
+                    FILE_ATTRIBUTE_NORMAL, FILE_OPEN_IF,
+                    FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                    capture_status=False)
+    for at in (0x20, 0x24):
+        for file_attributes in (FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+                                0, FILE_ATTRIBUTE_NORMAL):
+            set_basic(s, handle, file_attributes, at)
+            query_attributes(s, handle)
+    set_basic(s, handle, FILE_ATTRIBUTE_DIRECTORY)
+    query_attributes(s, handle)
+    set_information(s, handle, FILE_POSITION_INFORMATION, bytes(8),
+                    'set position')
+    s.call('NtClose', handle)
+
+    s = corpus.scenario('set end of file')
+    handle = create(s, FILE, GENERIC_WRITE | SYNCHRONIZE, 0, FILE_OPEN,
+                    FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT)
+    set_information(s, handle, FILE_END_OF_FILE_INFORMATION, bytes(8),
+                    'set end of file')
+    s.call('NtClose', handle)
 
     # The size is checked before anything is read, so nothing is mounted.
     s = corpus.scenario('StfsCreateDevice wrong size')
