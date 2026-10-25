@@ -543,6 +543,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     bool signed_zero_inf_nan_preserve_float32;
     bool denorm_flush_to_zero_float32;
     bool rounding_mode_rte_float32;
+    bool rounding_mode_rtz_float32 = false;
 
     bool fragment_shader_sample_interlock;
 
@@ -909,6 +910,19 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // vertex shaders, and the host's in pixel shaders where the extra
   // instructions cost too much.
   spv::Id ScalarEstimate(ScalarEstimateOp op, spv::Id value);
+  // Whether alu_round_toward_zero applies, only to vertex shaders since the
+  // extra instructions per operation are too slow per pixel.
+  bool RoundsTowardZero() const;
+  // Whether the shader's rounding mode does it, with no extra instructions.
+  bool RoundsTowardZeroInHardware() const;
+  // Guest ALU sums and products of floats or float vectors, rounded toward
+  // zero if RoundsTowardZero.
+  spv::Id AluAdd(spv::Id a, spv::Id b);
+  spv::Id AluSubtract(spv::Id a, spv::Id b);
+  spv::Id AluMultiply(spv::Id a, spv::Id b);
+  // Steps a sum or product of a and b rounded to nearest toward zero if its
+  // exact error shows it rounded away, and saturates overflow.
+  spv::Id RoundTowardZero(spv::Id rounded, spv::Id error, spv::Id a, spv::Id b);
   // Pack/unpack two floats as Xbox 360 extended-range float16, where exponent
   // 31 is a large finite value (up to +-131008), not Inf/NaN.
   spv::Id PackFloat16x2ExtendedRange(spv::Id float2_value);

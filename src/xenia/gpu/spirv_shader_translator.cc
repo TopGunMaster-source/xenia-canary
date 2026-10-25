@@ -212,6 +212,8 @@ SpirvShaderTranslator::Features::Features(
           vulkan_device->properties().shaderDenormFlushToZeroFloat32),
       rounding_mode_rte_float32(
           vulkan_device->properties().shaderRoundingModeRTEFloat32),
+      rounding_mode_rtz_float32(
+          vulkan_device->properties().shaderRoundingModeRTZFloat32),
       fragment_shader_sample_interlock(
           vulkan_device->properties().fragmentShaderSampleInterlock),
       demote_to_helper_invocation(
@@ -511,7 +513,7 @@ void SpirvShaderTranslator::StartTranslation() {
   if (features_.spirv_version < spv::Spv_1_4) {
     if (features_.signed_zero_inf_nan_preserve_float32 ||
         features_.denorm_flush_to_zero_float32 ||
-        features_.rounding_mode_rte_float32) {
+        features_.rounding_mode_rte_float32 || RoundsTowardZeroInHardware()) {
       builder_->addExtension("SPV_KHR_float_controls");
     }
   }
@@ -1320,8 +1322,12 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
     builder_->addExecutionMode(function_main_,
                                spv::ExecutionModeSignedZeroInfNanPreserve, 32);
   }
-  if (features_.rounding_mode_rte_float32 &&
-      !cvars::spirv_disable_rounding_mode_rte) {
+  if (RoundsTowardZeroInHardware()) {
+    builder_->addCapability(spv::CapabilityRoundingModeRTZ);
+    builder_->addExecutionMode(function_main_,
+                               spv::ExecutionModeRoundingModeRTZ, 32);
+  } else if (features_.rounding_mode_rte_float32 &&
+             !cvars::spirv_disable_rounding_mode_rte) {
     builder_->addCapability(spv::CapabilityRoundingModeRTE);
     builder_->addExecutionMode(function_main_,
                                spv::ExecutionModeRoundingModeRTE, 32);

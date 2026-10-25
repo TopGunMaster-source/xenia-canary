@@ -278,11 +278,12 @@ DEFINE_bool(
     "GPU");
 
 DEFINE_bool(
-    mulsc_round_toward_zero, false,
-    "Round mulsc products toward zero instead of to nearest even. This fixes "
-    "bad geometry in several Volition Engine titles and possibly others. "
-    "This rounding behavior hasn't been confirmed on real hardware, so it's "
-    "disabled by default.",
+    alu_round_toward_zero, true,
+    "Round vertex shader ALU sums and products toward zero, with unfused "
+    "multiply-adds and overflow saturating, instead of rounding to nearest "
+    "even. This is what the Xenos does and fixes bad geometry in several "
+    "Volition Engine titles. Pixel shaders keep rounding to nearest, the "
+    "extra instructions per operation are too slow there.",
     "GPU");
 
 DEFINE_bool(xenos_sample_positions, false,
