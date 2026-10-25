@@ -24,7 +24,7 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 
 ### 4. Helped post a wrong claim publicly
 * **What:** the reply drafted for Xenia Edge's issue #319 said Burnout 3 fails in Edge and gets further in our fork. Edge's author pointed out the test used the wrong XeFu build.
-* **Cost:** an embarrassing public correction, in a thread that was already tense.
+* **Cost:** the claim had to be corrected publicly.
 * **Why:** a surprising result ("we're ahead") was treated as a win, not as something to explain, and it went public unchecked.
 * **Rule:** anything posted in the owner's name is checked against its evidence first, and surprising results are investigated before they're claimed.
 
