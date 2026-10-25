@@ -29,10 +29,10 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Rule:** anything posted in the owner's name is checked against its evidence first, and surprising results are investigated before they're claimed.
 
 ### 5. Didn't look for existing work before starting
-* **What:** Xenia Edge already ran original Xbox games through XeFu (since September 2026). It was found only weeks into the project, after the owner had suggested someone else might be doing this.
-* **Cost:** the goal of being first was already gone before most of the work was done. Some work duplicated Edge's.
+* **What:** Xenia Edge already ran original Xbox games through XeFu (since September 2026). It was found only weeks into the project.
+* **Cost:** some work duplicated Edge's.
 * **Why:** went straight to building, without a search of other forks, issues and forums.
-* **Rule:** at the start of any project, and again when the owner suggests it, search for prior work.
+* **Rule:** at the start of any project, search for prior work.
 
 ## Debugging mistakes
 
