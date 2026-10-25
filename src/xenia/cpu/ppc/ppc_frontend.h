@@ -49,6 +49,10 @@ extern UserModeSyscallHook g_user_mode_syscall_hook;
 // mode.
 using UserModeFetchHook = void (*)(PPCContext* ppc_context, uint32_t target);
 extern UserModeFetchHook g_user_mode_fetch_hook;
+// Called for a branch to the host return address (0xBCBCBCBC) that isn't the
+// current frame's own return. Doesn't return if it takes the branch over.
+using HostReturnHook = void (*)(PPCContext*);
+extern HostReturnHook g_host_return_hook;
 
 // Research: the r2 values (xefu's x86 EIP) seen when user-mode code is
 // resolved, as a ring (newest at index - 1); consecutive repeats skipped.

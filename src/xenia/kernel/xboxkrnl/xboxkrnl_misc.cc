@@ -823,6 +823,31 @@ static void CheckStackpointsAfterCall(cpu::ppc::PPCContext* context,
   backend->SetGuestStackDepth(context, depth_before);
 }
 
+#if XE_USER_MODE_FAULTS
+// Where xefu's user-mode handler returns to when it returns through the word
+// below its stack pointer (see RunUserModeHandler).
+struct HandlerReturn {
+  CONTEXT context;
+  volatile bool returned;
+  uint32_t stack_depth;
+};
+static thread_local HandlerReturn* t_handler_return = nullptr;
+static std::atomic<uint32_t> g_handler_return_logs{0};
+
+static void HostReturnHook(cpu::ppc::PPCContext* pc) {
+  HandlerReturn* target = t_handler_return;
+  if (!target) {
+    return;
+  }
+  if (g_handler_return_logs.fetch_add(1) < 20) {
+    XELOGI("BACKCOMPAT xefu's handler returned past its own frame (r1 {:08X})",
+           uint32_t(pc->r[1]));
+  }
+  target->returned = true;
+  RtlRestoreContext(&target->context, nullptr);
+}
+#endif
+
 static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
                                    uint32_t record, uint32_t iar) {
   XEFU_PHASE();
@@ -847,8 +872,27 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   XEFU_PHASE();
   uint32_t stack_depth =
       kernel_state()->processor()->backend()->GetGuestStackDepth(pc);
+#if XE_USER_MODE_FAULTS
+  // A return through that word lands here (HostReturnHook), from however
+  // deep in the handler it's made.
+  HandlerReturn* outer = t_handler_return;
+  HandlerReturn here;
+  here.returned = false;
+  here.stack_depth = stack_depth;
+  t_handler_return = &here;
+  RtlCaptureContext(&here.context);
+  if (!here.returned) {
+    kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
+                                         args, xe::countof(args));
+  } else {
+    kernel_state()->processor()->backend()->SetGuestStackDepth(
+        pc, here.stack_depth);
+  }
+  t_handler_return = outer;
+#else
   kernel_state()->processor()->Execute(thread->thread_state(), st->handler,
                                        args, xe::countof(args));
+#endif
   CheckStackpointsAfterCall(pc, stack_depth, "xefu's user-mode handler");
   XEFU_PHASE();
 
@@ -1944,6 +1988,7 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   cpu::ppc::g_user_mode_syscall_hook = UserModeSyscallHook;
 #if XE_USER_MODE_FAULTS
   cpu::ppc::g_user_mode_fetch_hook = UserModeFetchHook;
+  cpu::ppc::g_host_return_hook = HostReturnHook;
 #endif
 
   auto thread = XThread::GetCurrentThread();
@@ -2054,6 +2099,9 @@ dword_result_t KeEnterUserMode_entry(const ppc_context_t& ctx) {
   } catch (const UserModeExit& exit) {
     status = exit.status;
   }
+#if XE_USER_MODE_FAULTS
+  t_handler_return = nullptr;
+#endif
   t_user_mode = previous;
   g_user_interrupt_frame = 0;
   g_user_context = nullptr;

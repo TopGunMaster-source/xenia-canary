@@ -540,6 +540,9 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
   auto guest_context = reinterpret_cast<ppc::PPCContext_s*>(raw_context);
 
   if (uint32_t(target_address) == kHostReturnAddress) {
+    if (ppc::g_host_return_hook) {
+      ppc::g_host_return_hook(guest_context);
+    }
     if (uint64_t host_address = ResolveHostReturn(guest_context)) {
       return host_address;
     }
