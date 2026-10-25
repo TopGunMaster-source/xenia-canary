@@ -182,10 +182,11 @@ struct TRAP_TRUE_I8
   static void Emit(X64Emitter& e, const EmitArgType& i) {
     Xbyak::Label& after = e.NewCachedLabel();
     unsigned flags = i.instr->flags;
-    Xbyak::Label& dotrap =
-        e.AddToTail([flags, &after](X64Emitter& e, Xbyak::Label& me) {
+    Xbyak::Label& dotrap = uint32_t guest_address = e.last_guest_address();
+    e.AddToTail(
+        [flags, guest_address, &after](X64Emitter& e, Xbyak::Label& me) {
           e.L(me);
-          e.Trap(flags);
+          e.Trap(flags, guest_address);
           // does Trap actually return control to the guest?
           e.jmp(after, X64Emitter::T_NEAR);
         });

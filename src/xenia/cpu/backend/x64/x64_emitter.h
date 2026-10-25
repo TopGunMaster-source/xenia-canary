@@ -270,7 +270,10 @@ class X64Emitter : public Xbyak::CodeGenerator {
   void MarkSourceOffset(const hir::Instr* i);
 
   void DebugBreak();
-  void Trap(uint16_t trap_type = 0);
+  // guest_address: the trapping instruction (UINT32_MAX = the last source
+  // offset seen, right for traps emitted in place).
+  void Trap(uint16_t trap_type = 0, uint32_t guest_address = UINT32_MAX);
+  uint32_t last_guest_address() const { return last_guest_address_; }
   void UnimplementedInstr(const hir::Instr* i);
 
   void Call(const hir::Instr* instr, GuestFunction* function);
@@ -417,6 +420,7 @@ class X64Emitter : public Xbyak::CodeGenerator {
   Xbyak::util::Cpu cpu_;
   uint64_t feature_flags_ = 0;
   uint32_t current_guest_function_ = 0;
+  uint32_t last_guest_address_ = 0;
   // Code of user-mode (alias space) functions, whose host views map
   // 0xE0000000+ directly, without the 4 KB physical offset.
   bool user_code_ = false;

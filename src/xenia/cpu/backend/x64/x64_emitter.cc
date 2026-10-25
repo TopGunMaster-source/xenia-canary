@@ -378,6 +378,7 @@ void X64Emitter::EmitProfilerEpilogue() {
 void X64Emitter::MarkSourceOffset(const Instr* i) {
   auto entry = source_map_arena_.Alloc<SourceMapEntry>();
   entry->guest_address = static_cast<uint32_t>(i->src1.offset);
+  last_guest_address_ = entry->guest_address;
   entry->hir_offset = uint32_t(i->block->ordinal << 16) | i->ordinal;
   entry->code_offset = static_cast<uint32_t>(getSize());
 
@@ -452,17 +453,20 @@ uint64_t TrapDebugBreak(void* raw_context, uint64_t address) {
     sp = back;
   }
   XELOGE(
-      "tw/td forced trap hit! This should be a crash! (lr {:08X} r1 {:08X} r3 "
-      "{:08X} r4 {:08X} r31 {:08X}; callers:{})",
-      uint32_t(ctx->lr), uint32_t(ctx->r[1]), uint32_t(ctx->r[3]),
-      uint32_t(ctx->r[4]), uint32_t(ctx->r[31]), chain);
+      "tw/td forced trap hit! This should be a crash! (at {:08X} lr {:08X} r1 "
+      "{:08X} r3 {:08X} r4 {:08X} r31 {:08X}; callers:{})",
+      uint32_t(address), uint32_t(ctx->lr), uint32_t(ctx->r[1]),
+      uint32_t(ctx->r[3]), uint32_t(ctx->r[4]), uint32_t(ctx->r[31]), chain);
   if (cvars::break_on_debugbreak) {
     xe::debugging::Break();
   }
   return 0;
 }
 
-void X64Emitter::Trap(uint16_t trap_type) {
+void X64Emitter::Trap(uint16_t trap_type, uint32_t guest_address) {
+  if (guest_address == UINT32_MAX) {
+    guest_address = last_guest_address_;
+  }
   switch (trap_type) {
     case 20:
     case 26:
@@ -473,7 +477,7 @@ void X64Emitter::Trap(uint16_t trap_type) {
     case 22:
       // Always trap?
       // TODO(benvanik): post software interrupt to debugger.
-      CallNative(TrapDebugBreak, 0);
+      CallNative(TrapDebugBreak, guest_address);
       break;
     case 25:
       // ?
