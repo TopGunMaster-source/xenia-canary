@@ -848,9 +848,30 @@ static void HostReturnHook(cpu::ppc::PPCContext* pc) {
 }
 #endif
 
+// Handler entries logged after each full TB flush (KeFlushCurrentEntireTb),
+// with whether each returned: shows which event a handler stalls on.
+static std::atomic<int32_t> g_handler_logs_after_flush{0};
+
 static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
                                    uint32_t record, uint32_t iar) {
   XEFU_PHASE();
+  const int32_t log_id = g_handler_logs_after_flush.fetch_sub(1);
+  if (log_id > 0) {
+    uint32_t code = 0, address = 0, p0 = 0, p1 = 0;
+    if (record) {
+      auto r = kernel_memory()->TranslateVirtual<const uint8_t*>(record);
+      code = xe::load_and_swap<uint32_t>(r + kRecordCode);
+      address = xe::load_and_swap<uint32_t>(r + kRecordAddress);
+      p0 = xe::load_and_swap<uint32_t>(r + kRecordParams);
+      p1 = xe::load_and_swap<uint32_t>(r + kRecordParams + 4);
+    }
+    XELOGI(
+        "BACKCOMPAT handler entry {} after flush: record {:08X} code {:08X} "
+        "address {:08X} params {:08X} {:08X}, iar {:08X}, x86 EIP {:08X} ESP "
+        "{:08X}, r0 {:X} r11 {:X}",
+        log_id, record, code, address, p0, p1, iar, uint32_t(pc->r[2]),
+        uint32_t(pc->r[7]), uint32_t(pc->r[0]), uint32_t(pc->r[11]));
+  }
   PropagateUserInterruptFlag();
   std::memcpy(&st->user_regs, pc, sizeof(*pc));
   WriteFrame(st, iar);
@@ -904,6 +925,9 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
 #endif
   CheckStackpointsAfterCall(pc, stack_depth, "xefu's user-mode handler");
   XEFU_PHASE();
+  if (log_id > 0) {
+    XELOGI("BACKCOMPAT handler entry {} after flush returned", log_id);
+  }
 
   // Back to user mode with whatever the handler left in the frame, and the
   // non-volatile registers as the handler left them live.
@@ -2199,6 +2223,7 @@ DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kNone, kSketchy);
 
 dword_result_t KeFlushCurrentEntireTb_entry(const ppc_context_t& ctx) {
   LogBackcompatCall("KeFlushCurrentEntireTb", ctx);
+  g_handler_logs_after_flush.store(64);
   if (g_alias_base) {
     SyncUserSpace();
   }
