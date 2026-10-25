@@ -163,7 +163,7 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 ### 37. XeFu's handler got the kernel's non-volatile registers instead of the x86 ones 🧪
 * **Symptom:** with #35 fixed (`1e02228`: the one-shot handler now returns properly, and the main thread survives), start-up ran until the game's Direct3D code first wrote to the Xbox GPU's interrupt registers (`0xFD600140`, `0xFD009140`). Right after that the x86 code jumped to address 0, and its stack pointer held `C4FF0690`, a value from the 360 side, not the Xbox.
 * **Cause:** on the 360, the kernel saves only the volatile registers in the trap frame and calls the handler with r14-r31 (and f14-f31) still holding the user's values. XeFu keeps x86 registers in those. Its handlers that emulate an instruction (such as a GPU register write) copy r14-r31 into the frame, edit them there, and load them back. Xenia called the handler with *all* registers set to the kernel's, so XeFu copied the kernel's r14-r31 into the frame and handed them back to the x86 code.
-* **Fix (`next commit`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Built, not yet tested.
+* **Fix (`50c5944e0`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Built, not yet tested.
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
