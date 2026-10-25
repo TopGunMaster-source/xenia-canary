@@ -17,8 +17,9 @@ Contact: [issue #319](https://github.com/has207/xenia-edge/issues/319) (our find
 | `614779434` | Stack arguments past r10 were read from the wrong bytes (64-bit and narrow ones) | `636d56f7d` |
 | `6f3029303` | Reads and writes at offset 0 and `FILE_USE_FILE_POINTER_POSITION` | `7840566a2` (adapted) |
 | `4c60e0b2f` | Writes set the changed (C) bit of user-mode page table entries; XeFu polls it to find what the Xbox wrote (textures) | `4c402ea4a` (rewritten for our mapping code) |
+| `cdf5adebf` | A branch to the host return address from a deeper frame returns to the host from the frame the host entered (XeFu's one-shot trap handler skips its own frame) | `e0124228f` (rewritten: uses our stackpoints' saved LR) |
 
-The two FPU fixes are good candidates for the `abort()` in [[Issues and Fixes]] #35: XeFu's C runtime checks its floating-point state.
+The return-to-host fix is the cause of [[Issues and Fixes]] #35 (the breakpoints were not XeFu's `abort()` after all).
 
 ## Fixed in both, found independently
 RSA bignum division (#22), RC4 key size (#14), `MmLockAndMapSegmentArray` (#21), the `\??\` prefix (#19), `XamLoaderLaunchTitleEx` (#18), 4 KB user-mode views (#25), instruction fetch faults at a user-mode branch target and returns to the host sentinel (#33), trap frame `ctr`/`cr`/`xer` at `0x1A0`/`0x1B0`/`0x1B8`.
