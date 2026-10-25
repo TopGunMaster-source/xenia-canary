@@ -15,7 +15,7 @@
 
 ## Steps
 
-1. Build a test disc image: the original Xbox disc (XDVDFS) plus `default.xex` = the game's XeFu build and its `xefutitle` table at the root. **Until October 25, 2026 every test used `xefu7.xex`, which is not Burnout 3's build** (see [[Issues and Fixes]] #40). Xenia mounts it as `\Device\Cdrom0` and starts XeFu, which then opens the game's `default.xbe`.
+1. Build a test disc image: the original Xbox disc (XDVDFS) plus `default.xex` = the game's XeFu build and its `xefutitle` table at the root. **Until October 25, 2026 every test used `xefu7.xex`, which is not Burnout 3's build** (see [[Issues and Fixes]] #40). Since then: `Burnout 3 - XeFu6 test.iso`, made from that disc by `Make XeFu6 Test Disc.exe` with `xefu6.xex` and `xefutitle6.xex` from the console's backward-compatibility update (`Desktop\Back Compact\From BC update`), run with `Run_Burnout3_xefu6.bat`. Xenia mounts it as `\Device\Cdrom0` and starts XeFu, which then opens the game's `default.xbe`.
 2. Put the Compatibility files in a folder and set `compatibility_root` to it in `xenia-canary.config.toml`.
 3. For diagnosis runs, also set:
    * `log_level = 3`
