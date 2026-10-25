@@ -85,6 +85,10 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **What:** failed downloads left empty `xenia_canary_windows_exe (1).zip` … `(4).zip` files in Downloads.
 * **Rule:** after each download, clear what isn't needed, including failed attempts.
 
+### 17. A settings file was sent to the PC as an older copy
+* **What:** a changed config sent under a file name used before arrived as the old version, though the copy reported success. Caught by reading the file back.
+* **Rule:** every file sent to the PC gets a new name, and every write is read back and checked.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
