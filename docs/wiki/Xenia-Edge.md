@@ -5,7 +5,7 @@
 Contact: [issue #319](https://github.com/has207/xenia-edge/issues/319) (our findings, and an offer to work together).
 
 ## How the two differ
-* **Boot:** Edge runs games the way a modded 360 does, through `xbox.xex`, which picks the XeFu build whitelisted for the game; it also lists OG Xbox games in its game list and reads their XBE directly. We start `xefu7.xex` from a test disc image.
+* **Boot:** Edge runs games the way a modded 360 does, through `xbox.xex`, which picks the XeFu build whitelisted for the game; it also lists OG Xbox games in its game list and reads their XBE directly. We start `xefu6.xex` (Burnout 3's assigned build; `xefu7.xex` until October 25, 2026, see [[Issues and Fixes]] #40) from a test disc image.
 * **Kernel:** Edge has its own guest scheduler (threads as fibers), so its thread-switching fixes don't apply here.
 
 ## Ported from Edge (credited to its author)
@@ -48,5 +48,16 @@ Same game copy (Xbox Originals digital release, unpacked `default.xbe`; certific
 | Media check: IOCTL `0x24080` on `D:` | answered (fix #23, `b104a8c`) | unhandled (`NtDeviceIoControlFile(0x24080) - unhandled IOCTL!`), then `0x335142` unhandled |
 | Result | game code keeps running (about 144,000 system calls in 100 s); black screen | XeFu gives up within a second (launch data `2, 2`) and returns to the dashboard |
 
-So with these files, Edge stops at the media check our fork already answers (shown in Edge's own log at `log_level = 3`). Edge's author reports Burnout 3 in game on `xefu6` with his own setup, which must pass that check some other way; how is unknown (a different game copy, or starting through an updated `xbox.xex`, are possibilities, not findings).
+So with these files, Edge stops at the media check our fork already answers (shown in Edge's own log at `log_level = 3`). Edge's author reports Burnout 3 in game on `xefu6` with his own setup, which must pass that check some other way. He later said he runs the game installed to the hard drive by booting `default.xbe` directly, and that he had seen the unhandled IOCTLs but they hadn't stopped any game he tried. Why his copy passes the check is still unconfirmed; a certificate that allows the hard drive is a guess, not a finding.
+
+## Edge with the media check answered (October 25, 2026)
+
+Test build `edge-mediacheck@05c1080b8`: Edge `3558152` plus one change, answering IOCTL `0x24080` with success (same as our `b104a8c`). Same game files, `xefu_launcher = xefu6.xex`; build tag and settings checked in the exe and the log.
+
+* **Result:** Burnout 3 boots into the game and is playable: the globe, the region and track select, and races (the log shows `default.xbe`, then track `tracks\US\C3_V1`, crash sounds and EA Trax loading). It closed normally.
+* **So:** with these files, the unanswered media check was the only thing stopping Edge. The fix was posted on Edge's issue #319.
+* **Speed:** everything runs in slow motion, not just races: the globe, zooming into a continent, and loading a track are all slow. Edge's author reports about 25 fps with his setup.
+  * First run had `log_level = 3` (2.17 GB of log); a second run at `log_level = 2` (166 KB of log) was still slow motion, so logging isn't the cause.
+  * Edge's log counts frames presented: about 10,700 in roughly 3¾ minutes (about 47 a second, loading included). That counts XeFu's presented frames, which need not match how often the game itself updates, so it isn't the game's frame rate.
+  * Not yet known: whether the game's own code is too slow under Xenia (CPU-bound) or its timing runs slow.
 
