@@ -213,6 +213,13 @@ dword_result_t NtSetInformationFile_entry(
   switch (info_class) {
     case XFileBasicInformation: {
       auto info = info_ptr.as<X_FILE_BASIC_INFORMATION*>();
+      // Of the attributes only the directory bit is kept, which a file can't
+      // take.
+      if ((info->attributes & vfs::kFileAttributeDirectory) &&
+          !(file->entry()->attributes() & vfs::kFileAttributeDirectory)) {
+        result = X_STATUS_INVALID_PARAMETER;
+        break;
+      }
 
       // The host calls can block on a slow drive.
       bool basic_result = true;
@@ -232,8 +239,6 @@ dword_result_t NtSetInformationFile_entry(
               basic_result &=
                   file->entry()->SetWriteTimestamp(info->last_write_time);
             }
-
-            basic_result &= file->entry()->SetAttributes(info->attributes);
           },
           GuestScheduler::BlockingCallClass::kConcurrent);
       if (!basic_result) {

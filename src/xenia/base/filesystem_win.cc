@@ -267,9 +267,5 @@ std::vector<FileInfo> ListFilesUnsorted(const std::filesystem::path& path) {
 
 }  // namespace internal
 
-bool SetAttributes(const std::filesystem::path& path, uint64_t attributes) {
-  return SetFileAttributes(path.c_str(), static_cast<DWORD>(attributes));
-}
-
 }  // namespace filesystem
 }  // namespace xe
