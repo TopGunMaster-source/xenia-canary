@@ -111,6 +111,7 @@ class X64HelperEmitter : public X64Emitter {
   GuestToHostThunk EmitGuestToHostThunk();
   ResolveFunctionThunk EmitResolveFunctionThunk();
   void* EmitGuestAndHostSynchronizeStackHelper();
+  void* EmitReturnToHostHelper();
   // 1 for loading byte, 2 for halfword and 4 for word.
   // these specialized versions save space in the caller
   void* EmitGuestAndHostSynchronizeStackSizeLoadThunk(
@@ -317,6 +318,7 @@ bool X64Backend::Initialize(Processor* processor) {
   if (cvars::enable_host_guest_stack_synchronization) {
     synchronize_guest_and_host_stack_helper_ =
         thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
+    return_to_host_helper_ = thunk_emitter.EmitReturnToHostHelper();
 
     synchronize_guest_and_host_stack_helper_size8_ =
         thunk_emitter.EmitGuestAndHostSynchronizeStackSizeLoadThunk(
@@ -973,6 +975,25 @@ ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
 }
 // r11 = size of callers stack, r8 = return address w/ adjustment
 // i'm not proud of this code, but it shouldn't be executed frequently at all
+// Returns to host code from the frame ResolveHostReturn picked, as that
+// frame's epilog would: drops the stackpoints from it inward and returns
+// through the host return address it was entered with.
+void* X64HelperEmitter::EmitReturnToHostHelper() {
+  _code_offsets code_offsets = {};
+  code_offsets.prolog = getSize();
+  mov(ecx, GetBackendCtxPtr(
+               offsetof(X64BackendContext, host_return_stackpoint_depth)));
+  mov(GetBackendCtxPtr(offsetof(X64BackendContext, current_stackpoint_depth)),
+      ecx);
+  mov(rsp, GetBackendCtxPtr(offsetof(X64BackendContext, host_return_stack)));
+  ret();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
+  return EmitCurrentForOffsets(code_offsets);
+}
+
 void* X64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   _code_offsets code_offsets = {};
   code_offsets.prolog = getSize();

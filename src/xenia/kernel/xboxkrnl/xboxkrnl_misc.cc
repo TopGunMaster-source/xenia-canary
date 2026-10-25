@@ -834,6 +834,12 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   uint64_t kernel_r1 = st->kernel_regs.r[1];
   std::memcpy(pc, &st->kernel_regs, sizeof(*pc));
   pc->r[1] = kernel_r1 - 0x400;  // keep clear of the caller's frame
+  // The word below the handler's stack pointer is where the console's
+  // dispatcher leaves its return address: xefu's one-shot handler (82045848
+  // in xefu7) skips its own frame and returns through it. Here that return
+  // leaves the handler, back to the host.
+  xe::store_and_swap<uint32_t>(
+      kernel_memory()->TranslateVirtual(uint32_t(pc->r[1]) - 8), 0xBCBCBCBC);
   uint64_t args[] = {record, st->frame};
   auto thread = XThread::GetCurrentThread();
   XEFU_PHASE();

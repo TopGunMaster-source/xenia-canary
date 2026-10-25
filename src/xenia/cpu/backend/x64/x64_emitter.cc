@@ -495,9 +495,47 @@ void X64Emitter::UnimplementedInstr(const hir::Instr* i) {
   assert_always();
 }
 
+// The guest return address host code (Processor::Execute) enters guest code
+// with.
+constexpr uint32_t kHostReturnAddress = 0xBCBCBCBC;
+
+// Where a branch to kHostReturnAddress continues, or 0. Guest code can return
+// to the address its caller saved rather than the one in its own frame: XeFu's
+// one-shot user mode exception handler calls a helper that returns through the
+// word its caller left at -8(r1), skipping the handler's own frame. When that
+// is the host return address, the branch returns to host code from the
+// innermost frame host code entered (the one that started with LR holding it),
+// not just from the current one.
+static uint64_t ResolveHostReturn(ppc::PPCContext_s* guest_context) {
+  if (!cvars::enable_host_guest_stack_synchronization) {
+    return 0;
+  }
+  auto backend = static_cast<X64Backend*>(guest_context->processor->backend());
+  X64BackendContext* bctx =
+      backend->BackendContextForGuestContext(guest_context);
+  for (uint32_t i = bctx->current_stackpoint_depth; i-- > 0;) {
+    const X64BackendStackpoint& sp = bctx->stackpoints[i];
+    if (sp.guest_return_address_ != kHostReturnAddress) {
+      continue;
+    }
+    // host_stack_ is the frame's host stack pointer on entry, at the host
+    // return address.
+    bctx->host_return_stack = sp.host_stack_;
+    bctx->host_return_stackpoint_depth = i;
+    return reinterpret_cast<uint64_t>(backend->return_to_host_helper());
+  }
+  return 0;
+}
+
 // This is used by the X64ThunkEmitter's ResolveFunctionThunk.
 uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
   auto guest_context = reinterpret_cast<ppc::PPCContext_s*>(raw_context);
+
+  if (uint32_t(target_address) == kHostReturnAddress) {
+    if (uint64_t host_address = ResolveHostReturn(guest_context)) {
+      return host_address;
+    }
+  }
 
   auto thread_state = guest_context->thread_state;
 

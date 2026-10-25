@@ -111,6 +111,11 @@ struct X64BackendContext {
   unsigned int flags;
   unsigned int Ox1000;  // constant 0x1000 so we can shrink each tail emitted
                         // add of it by... 2 bytes lol
+  // A branch to the host return address (0xBCBCBCBC) from a frame deeper than
+  // the one host code entered: the host stack to return with, and the
+  // stackpoint depth left after returning (see ResolveHostReturn).
+  uint64_t host_return_stack;
+  unsigned int host_return_stackpoint_depth;
 };
 constexpr unsigned int DEFAULT_VMX_MXCSR =
     0x8000 |                   // flush to zero
@@ -170,6 +175,7 @@ class X64Backend : public Backend {
   virtual void PrepareForReentry(void* ctx) override;
   uint32_t GetGuestStackDepth(void* ctx) override;
   void SetGuestStackDepth(void* ctx, uint32_t depth) override;
+  void* return_to_host_helper() const { return return_to_host_helper_; }
   X64BackendContext* BackendContextForGuestContext(void* ctx) {
     return reinterpret_cast<X64BackendContext*>(
         reinterpret_cast<intptr_t>(ctx) - sizeof(X64BackendContext));
@@ -205,6 +211,7 @@ class X64Backend : public Backend {
   GuestToHostThunk guest_to_host_thunk_;
   ResolveFunctionThunk resolve_function_thunk_;
   void* synchronize_guest_and_host_stack_helper_ = nullptr;
+  void* return_to_host_helper_ = nullptr;
 
   // loads stack sizes 1 byte, 2 bytes or 4 bytes
   void* synchronize_guest_and_host_stack_helper_size8_ = nullptr;
