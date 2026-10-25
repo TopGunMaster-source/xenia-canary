@@ -1667,6 +1667,9 @@ static void UserModeFetchHook(cpu::ppc::PPCContext* pc, uint32_t target) {
     return;
   }
   if (pc->virtual_membase != g_alias_base) {
+    if (target < 0x80000000u) {
+      return;  // not the user-code range; nothing to do for kernel code
+    }
     // Kernel-mode code (xefu's handler, say) branching into the range Xenia
     // reserves for user code: on a 360 that's ordinary kernel memory there.
     static std::atomic<uint32_t> kernel_logs{0};

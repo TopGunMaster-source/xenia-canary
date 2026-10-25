@@ -160,10 +160,15 @@ Status key: ✅ fixed and confirmed in a test run · 🧪 fixed, waiting for a t
 * **Test of `3de766a`** (return address in the right word): the return was taken, but the search for the frame to return from picked the main thread's very first frame, so the whole thread ended. The handler's own frame record doesn't show the host return address by the time XeFu returns.
 * **Fix (`55f747754`):** the handler call now records where it was made (like the restart point for user-mode faults). A return to the host address while a handler is running goes straight back there and restores the stack records, whatever happened to them in between. Confirmed in the test of `1e02228`: no breakpoints, and the main thread keeps running. Start-up then stops at #37.
 
-### 37. XeFu's handler got the kernel's non-volatile registers instead of the x86 ones 🧪
+### 37. XeFu's handler got the kernel's non-volatile registers instead of the x86 ones ✅
 * **Symptom:** with #35 fixed (`1e02228`: the one-shot handler now returns properly, and the main thread survives), start-up ran until the game's Direct3D code first wrote to the Xbox GPU's interrupt registers (`0xFD600140`, `0xFD009140`). Right after that the x86 code jumped to address 0, and its stack pointer held `C4FF0690`, a value from the 360 side, not the Xbox.
 * **Cause:** on the 360, the kernel saves only the volatile registers in the trap frame and calls the handler with r14-r31 (and f14-f31) still holding the user's values. XeFu keeps x86 registers in those. Its handlers that emulate an instruction (such as a GPU register write) copy r14-r31 into the frame, edit them there, and load them back. Xenia called the handler with *all* registers set to the kernel's, so XeFu copied the kernel's r14-r31 into the frame and handed them back to the x86 code.
-* **Fix (`50c5944e0`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Built, not yet tested.
+* **Fix (`50c5944e0`):** XeFu's handler now runs with the user's r14-r31 and f14-f31 live, and user mode resumes with them as the handler left them. Confirmed in the test of `c695c83`: the game's own code ran on (see #38).
+
+### 38. Xenia crashed when XeFu's code branched to address 0 🧪
+* **Symptom:** with #37 fixed (`c695c83`), start-up went much further: the game's own x86 code ran (EIP `001B9090`, with a proper Xbox stack), about 7,500 system calls and 14,000 faults. Then Xenia stopped with an "unhandled exception" (an access violation in its own code, found with the crash dump and the build's symbols).
+* **Cause:** XeFu's translated code branched to address `0`. On a 360, user code branching to an unmapped address takes an instruction fault, and XeFu handles it, probably by translating the missing block. Xenia only raised that fault for branches into its user-code range (`0xB0000000`-`0xBFFFFFFF`). For address 0 it tried to translate PowerPC code there, failed, and dereferenced the missing result.
+* **Fix (`next commit`):** user-mode branches below `0x80000000` with no translated code now go through the same instruction-fault path. Built, not yet tested.
 
 ### 36. Fixes brought over from Xenia Edge 🧪
 * Two FPU instruction bugs (`mtfsfi`, `mcrfs`) that broke XeFu's rounding mode, file I/O offsets, stack arguments, and the page table changed bit. Details and credit on [[Xenia Edge]]. Built, not yet tested.
