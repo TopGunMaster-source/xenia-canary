@@ -522,6 +522,14 @@ static uint64_t ResolveHostReturn(ppc::PPCContext_s* guest_context) {
     // return address.
     bctx->host_return_stack = sp.host_stack_;
     bctx->host_return_stackpoint_depth = i;
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1) < 20) {
+      XELOGI(
+          "Return to the host from stackpoint depth {} to {} (guest r1 "
+          "{:08X}, that frame's r1 {:08X})",
+          bctx->current_stackpoint_depth, i, uint32_t(guest_context->r[1]),
+          sp.guest_stack_);
+    }
     return reinterpret_cast<uint64_t>(backend->return_to_host_helper());
   }
   return 0;

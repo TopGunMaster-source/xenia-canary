@@ -838,8 +838,10 @@ static uint32_t RunUserModeHandler(UserModeState* st, cpu::ppc::PPCContext* pc,
   // dispatcher leaves its return address: xefu's one-shot handler (82045848
   // in xefu7) skips its own frame and returns through it. Here that return
   // leaves the handler, back to the host.
+  // Processor::Execute moves r1 down by 64 + 112 before the call.
   xe::store_and_swap<uint32_t>(
-      kernel_memory()->TranslateVirtual(uint32_t(pc->r[1]) - 8), 0xBCBCBCBC);
+      kernel_memory()->TranslateVirtual(uint32_t(pc->r[1]) - (64 + 112) - 8),
+      0xBCBCBCBC);
   uint64_t args[] = {record, st->frame};
   auto thread = XThread::GetCurrentThread();
   XEFU_PHASE();
@@ -1678,8 +1680,15 @@ static std::atomic<HANDLE> g_user_mode_host_thread{nullptr};
 // function under the host PC and the guest return chain on its host stack.
 static std::string SampleUserModeThread() {
   HANDLE thread = g_user_mode_host_thread.load();
-  if (!thread || SuspendThread(thread) == DWORD(-1)) {
+  if (!thread) {
     return {};
+  }
+  if (WaitForSingleObject(thread, 0) == WAIT_OBJECT_0) {
+    return "  guest pc: the user mode thread's host thread has exited\n";
+  }
+  if (SuspendThread(thread) == DWORD(-1)) {
+    return fmt::format("  guest pc: can't suspend the thread (error {})\n",
+                       GetLastError());
   }
   // Only copy while it's suspended (it may hold the heap or log lock).
   CONTEXT context = {};
@@ -1694,7 +1703,9 @@ static std::string SampleUserModeThread() {
   }
   ResumeThread(thread);
   if (!ok) {
-    return {};
+    return fmt::format(
+        "  guest pc: can't read the thread's context (error {})\n",
+        GetLastError());
   }
   auto code_cache = kernel_state()->processor()->backend()->code_cache();
   auto describe = [&](uint64_t host_pc) -> std::string {
