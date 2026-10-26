@@ -69,10 +69,6 @@ namespace kernel {
 namespace xam {
 namespace {
 
-// A Microsoft block from while the 360 was made. XLink Kai only forwards
-// frames from console vendors.
-constexpr uint8_t kMacPrefix[] = {0x00, 0x1D, 0xD8};
-
 // Titles with cross-platform System Link derive their broadcast keys from
 // their LAN key AES-CBC encrypted with key 0x43 and a zero IV, which only a
 // console can compute.
@@ -281,11 +277,7 @@ std::unique_ptr<net::SystemLink> CreateSystemLink(KernelState* kernel_state,
     association.cross_platform.emplace();
     transport = OpenCrossPlatformTransport(*association.cross_platform, port);
   } else {
-    // New for every title so instances on one machine never share it.
-    net::secure::Mac mac;
-    std::copy(std::begin(kMacPrefix), std::end(kMacPrefix), mac.begin());
-    net::Random(std::span(mac).subspan(std::size(kMacPrefix)));
-    transport = OpenTransport(mac);
+    transport = OpenTransport(kernel_state->xconfig()->mac_address());
   }
   if (!transport) {
     return nullptr;
