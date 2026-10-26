@@ -127,6 +127,11 @@ DEFINE_bool(
 namespace xe {
 namespace gpu {
 
+// Ring buffer progress, for xefu's heartbeat (xboxkrnl_misc.cc).
+std::atomic<uint32_t> g_ring_wptr_writes{0};
+std::atomic<uint32_t> g_ring_wptr_last{0};
+std::atomic<uint32_t> g_ring_rptr_last{0};
+
 // This should be written completely differently with support for different
 // types.
 void SaveGPUSetting(GPUSetting setting, uint64_t value) {
@@ -408,6 +413,7 @@ void CommandProcessor::WorkerThreadMain() {
 
     // Execute. Note that we handle wraparound transparently.
     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    g_ring_rptr_last.store(read_ptr_index_, std::memory_order_relaxed);
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
@@ -529,6 +535,8 @@ XE_NOINLINE XE_COLD void CommandProcessor::LogKickoffInitator(uint32_t value) {
 }
 
 void CommandProcessor::UpdateWritePointer(uint32_t value) {
+  g_ring_wptr_writes.fetch_add(1, std::memory_order_relaxed);
+  g_ring_wptr_last.store(value, std::memory_order_relaxed);
   XE_UNLIKELY_IF(cvars::log_ringbuffer_kickoff_initiator_bts) {
     LogKickoffInitator(value);
   }
