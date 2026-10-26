@@ -1,7 +1,7 @@
 """File corpus: a plain open, opens of a path's target directory, which open
 the directory holding the last component and say whether that exists, failed
-opens and a file's basic information. Everything is under game:\\krnlgen,
-which the first scenario makes.
+opens, a file's basic information and a rename to a \\?? path and back.
+Everything is under game:\\krnlgen, which the first scenario makes.
 
 The target directory's handle is checked through its attributes. A failed
 open's handle is captured instead of closed. Basic information is captured
@@ -14,6 +14,7 @@ DOS_DEVICES = 0xFFFFFFFD
 OBJ_CASE_INSENSITIVE = 0x40
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
+DELETE = 0x00010000
 SYNCHRONIZE = 0x00100000
 FILE_WRITE_ATTRIBUTES = 0x100
 FILE_ATTRIBUTE_READONLY = 0x1
@@ -30,6 +31,7 @@ FILE_NON_DIRECTORY_FILE = 0x40
 OPEN_TARGET_DIRECTORY = 0x4
 FILE_BASIC_INFORMATION = 4
 BASIC_INFORMATION_SIZE = 0x28
+FILE_RENAME_INFORMATION = 10
 FILE_POSITION_INFORMATION = 14
 FILE_END_OF_FILE_INFORMATION = 20
 FILE_NETWORK_OPEN_INFORMATION = 34
@@ -49,7 +51,8 @@ def attributes(s, path):
 
 
 def create(s, path, access, file_attributes, disposition, create_options,
-           options=None, capture_status=True, capture_handle=False):
+           options=None, capture_status=True, capture_handle=False,
+           variable='handle'):
     """NtCreateFile, or IoCreateFile with `options`. Returns the handle's
     Variable."""
     handle_out = s.alloc(4, 'handle')
@@ -60,7 +63,7 @@ def create(s, path, access, file_attributes, disposition, create_options,
     if options is not None:
         export = 'IoCreateFile'
         args.append(options)
-    handle = s.variable('handle')
+    handle = s.variable(variable)
     capture = ([iosb] if capture_status else []) + (
         [handle_out] if capture_handle else [])
     s.call(export, *args, capture=capture, store=[(handle, handle_out)])
@@ -84,11 +87,11 @@ def query_basic(s, handle, length=BASIC_INFORMATION_SIZE):
            FILE_BASIC_INFORMATION, capture=[iosb, info + 0x20])
 
 
-def set_information(s, handle, info_class, data, name):
+def set_information(s, handle, info_class, data, name, status_only=False):
     iosb = s.alloc(8, 'set iosb')
     info = s.alloc(len(data), 'information', data)
     s.call('NtSetInformationFile', handle, iosb, info, len(data), info_class,
-           capture=[iosb], name=name)
+           capture=[iosb.prefix(4) if status_only else iosb], name=name)
 
 
 def set_basic(s, handle, file_attributes, at=0x20):
@@ -98,6 +101,25 @@ def set_basic(s, handle, file_attributes, at=0x20):
     struct.pack_into('>I', data, at, file_attributes)
     set_information(s, handle, FILE_BASIC_INFORMATION, bytes(data),
                     f'set attributes {file_attributes:#x} at {at:#x}')
+
+
+def rename(s, handle, root, path, name):
+    """FileRenameInformation, not replacing, naming `path` under `root`.
+    FATX leaves the Information of the cache's last page read through the
+    request, 0x1000 on a miss, so only the status is captured."""
+    text = s.string(path, 'rename path')
+    data = struct.pack('>B3xIHHI', 0, root, len(path), len(path) + 1,
+                       text.address)
+    set_information(s, handle, FILE_RENAME_INFORMATION, data, name,
+                    status_only=True)
+
+
+def exists(s, path):
+    """The target directory open, whose Information says whether `path`
+    exists."""
+    handle = create(s, path, GENERIC_READ | SYNCHRONIZE, 0, FILE_OPEN,
+                    FILE_SYNCHRONOUS_IO_NONALERT, OPEN_TARGET_DIRECTORY)
+    s.call('NtClose', handle)
 
 
 def target_directory(s, path):
@@ -188,6 +210,21 @@ def build(corpus):
     set_information(s, handle, FILE_END_OF_FILE_INFORMATION, bytes(8),
                     'set end of file')
     s.call('NtClose', handle)
+
+    # A full \\?? name with no root, as XeFu renames, and back by a name under
+    # the DOS devices root.
+    s = corpus.scenario('rename')
+    source = create(s, ROOT + '\\from', GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                    FILE_ATTRIBUTE_NORMAL, FILE_OVERWRITE_IF,
+                    FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                    capture_status=False, variable='source')
+    for root, path, name in (
+            (0, '\\??\\' + ROOT + '\\to', 'rename under \\??'),
+            (DOS_DEVICES, ROOT + '\\from', 'rename back')):
+        rename(s, source, root, path, name)
+        exists(s, ROOT + '\\to')
+        exists(s, ROOT + '\\from')
+    s.call('NtClose', source)
 
     # The size is checked before anything is read, so nothing is mounted.
     s = corpus.scenario('StfsCreateDevice wrong size')

@@ -464,6 +464,10 @@ class Pointer:
         return Pointer(self.offset + delta, self.size - delta,
                        f'{self.name}+{delta:#x}')
 
+    def prefix(self, size):
+        """The range's first `size` bytes."""
+        return Pointer(self.offset, size, f'{self.name}[:{size:#x}]')
+
     @property
     def address(self):
         """The guest address, for a pointer stored inside arena data."""

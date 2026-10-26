@@ -1,6 +1,6 @@
 {
  "corpus": "io",
- "source": "RGH Jasper, kernel and xam 2.0.17559, 2026-10-25",
+ "source": "RGH Jasper, kernel and xam 2.0.17559, 2026-10-26",
  "steps": [
   {
    "scenario": "tree",
@@ -1488,6 +1488,331 @@
    "args": [
     {
      "variable": "handle"
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtCreateFile",
+   "export": "NtCreateFile",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "pointer": "handle",
+     "offset": 0
+    },
+    {
+     "value": 1074855936
+    },
+    {
+     "pointer": "attributes",
+     "offset": 48
+    },
+    {
+     "pointer": "iosb",
+     "offset": 8
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 128
+    },
+    {
+     "value": 3
+    },
+    {
+     "value": 5
+    },
+    {
+     "value": 96
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "rename under \\??",
+   "export": "NtSetInformationFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "set iosb[:0x4]": "00000000"
+   },
+   "args": [
+    {
+     "variable": "source"
+    },
+    {
+     "pointer": "set iosb",
+     "offset": 88
+    },
+    {
+     "pointer": "information",
+     "offset": 96
+    },
+    {
+     "value": 16
+    },
+    {
+     "value": 10
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "IoCreateFile",
+   "export": "IoCreateFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "iosb": "0000000000000004"
+   },
+   "args": [
+    {
+     "pointer": "handle",
+     "offset": 112
+    },
+    {
+     "value": 2148532224
+    },
+    {
+     "pointer": "attributes",
+     "offset": 160
+    },
+    {
+     "pointer": "iosb",
+     "offset": 120
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 3
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 32
+    },
+    {
+     "value": 4
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtClose",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "handle"
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "IoCreateFile",
+   "export": "IoCreateFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "iosb": "0000000000000005"
+   },
+   "args": [
+    {
+     "pointer": "handle",
+     "offset": 176
+    },
+    {
+     "value": 2148532224
+    },
+    {
+     "pointer": "attributes",
+     "offset": 224
+    },
+    {
+     "pointer": "iosb",
+     "offset": 184
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 3
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 32
+    },
+    {
+     "value": 4
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtClose",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "handle"
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "rename back",
+   "export": "NtSetInformationFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "set iosb[:0x4]": "00000000"
+   },
+   "args": [
+    {
+     "variable": "source"
+    },
+    {
+     "pointer": "set iosb",
+     "offset": 264
+    },
+    {
+     "pointer": "information",
+     "offset": 272
+    },
+    {
+     "value": 16
+    },
+    {
+     "value": 10
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "IoCreateFile",
+   "export": "IoCreateFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "iosb": "0000000000000005"
+   },
+   "args": [
+    {
+     "pointer": "handle",
+     "offset": 288
+    },
+    {
+     "value": 2148532224
+    },
+    {
+     "pointer": "attributes",
+     "offset": 336
+    },
+    {
+     "pointer": "iosb",
+     "offset": 296
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 3
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 32
+    },
+    {
+     "value": 4
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtClose",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "handle"
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "IoCreateFile",
+   "export": "IoCreateFile",
+   "r3": "0000000000000000",
+   "capture": {
+    "iosb": "0000000000000004"
+   },
+   "args": [
+    {
+     "pointer": "handle",
+     "offset": 352
+    },
+    {
+     "value": 2148532224
+    },
+    {
+     "pointer": "attributes",
+     "offset": 400
+    },
+    {
+     "pointer": "iosb",
+     "offset": 360
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 0
+    },
+    {
+     "value": 3
+    },
+    {
+     "value": 1
+    },
+    {
+     "value": 32
+    },
+    {
+     "value": 4
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtClose",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "handle"
+    }
+   ]
+  },
+  {
+   "scenario": "rename",
+   "name": "NtClose",
+   "export": "NtClose",
+   "r3": "0000000000000000",
+   "args": [
+    {
+     "variable": "source"
     }
    ]
   },
