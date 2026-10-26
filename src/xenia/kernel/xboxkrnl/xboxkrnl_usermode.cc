@@ -700,12 +700,12 @@ DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kMemory, kImplemented);
 void KeFlushUserModeTb_entry() { kernel_memory()->FlushChangedUserPages(); }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeTb, kMemory, kImplemented);
 
-void KeFlushCurrentEntireTb_entry() {
-  kernel_memory()->FlushChangedUserPages();
-}
+// TODO(has207): keeping unchanged pages here, as the user mode flushes do,
+// bugchecks Crimson Skies under XeFu for an unknown reason.
+void KeFlushCurrentEntireTb_entry() { kernel_memory()->FlushUserPageTable(); }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kMemory, kImplemented);
 
-void KeFlushEntireTb_entry() { kernel_memory()->FlushChangedUserPages(); }
+void KeFlushEntireTb_entry() { kernel_memory()->FlushUserPageTable(); }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushEntireTb, kMemory, kImplemented);
 
 }  // namespace xboxkrnl

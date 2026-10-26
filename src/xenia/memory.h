@@ -761,10 +761,11 @@ class Memory {
   // Claims the address space user mode code runs in, which starts empty.
   bool EnableUserModeViews();
 
-  // Drops every page mapped through the page table.
+  // Drops every page mapped through the page table, which flushing the entire
+  // TB does.
   void FlushUserPageTable();
   // Drops the pages mapped through the page table whose entries changed since
-  // they were mapped, which flushing the TB does.
+  // they were mapped, which flushing the user mode TB does.
   void FlushChangedUserPages();
 
   // Base of the user mode address space, null until it is created.
