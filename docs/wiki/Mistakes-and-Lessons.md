@@ -94,6 +94,10 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Cost:** two wrong explanations given before being checked; one test run on the cache guess.
 * **Rule:** before reading meaning into a diagnostic, check in the code where its numbers come from and in which state they're valid.
 
+### 19. Read a missing log line as a missing call
+* **What:** Edge's log was compared with ours to see which calls Edge makes, but Edge leaves frequent kernel calls (locks, waits, events) out of its log unless `log_high_frequency_kernel_calls` is on, which it wasn't. So "Edge's worker thread does nothing" and "Edge's display thread waits too" were read from lines that were never written.
+* **Rule:** before concluding from an absence in a log, check that the program logs that call at all with the settings used.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
