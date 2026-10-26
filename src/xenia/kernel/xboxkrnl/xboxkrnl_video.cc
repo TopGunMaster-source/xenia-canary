@@ -22,6 +22,11 @@
 #include "xenia/xbox.h"
 
 DEFINE_bool(interlaced, false, "Toggles interlaced mode.", "Video");
+DEFINE_bool(xefu_invalidate_on_swap, true,
+            "While XeFu runs, tell the GPU on every VdSwap that all of the "
+            "emulated Xbox's memory may have changed (a test: XeFu's user mode "
+            "writes through views the GPU doesn't watch).",
+            "Kernel");
 // BT.709 on modern monitors and TVs looks the closest to the Xbox 360 connected
 // to an HDTV.
 DEFINE_uint32(kernel_display_gamma_type, 2,
@@ -512,6 +517,19 @@ void VdSwap_entry(
   }
   gpu_fetch.base_address = frontbuffer_physical_address >> 12;
   g_vdswap_count.fetch_add(1, std::memory_order_relaxed);
+  if (cvars::xefu_invalidate_on_swap && kernel_memory()->code_alias_active()) {
+    // Physical 0x06000000-0x0EFFFFFF holds the emulated Xbox's memory (user
+    // segments B6000000-BEFFFFFF); 0xA0000000 is the physical heap's view.
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+      XELOGI(
+          "VdSwap: invalidating the GPU's copy of physical "
+          "06000000-0EFFFFFF on each swap (xefu_invalidate_on_swap)");
+    }
+    kernel_memory()->TriggerPhysicalMemoryCallbacks(
+        xe::global_critical_region::AcquireDirect(), 0xA6000000u, 0x09000000u,
+        true, true, true);
+  }
   g_vdswap_last_size.store((*width << 16) | (*height & 0xFFFF),
                            std::memory_order_relaxed);
   XE_MAYBE_UNUSED

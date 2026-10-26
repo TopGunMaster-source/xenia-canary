@@ -468,6 +468,8 @@ class Memory {
     code_alias_high_ = high;
     code_alias_base_ = alias_base;
   }
+  // Whether an alias address space runs code (XeFu's user mode is active).
+  bool code_alias_active() const { return code_alias_base_ != nullptr; }
   bool IsCodeAliasAddress(uint32_t guest_address) const {
     return code_alias_base_ && guest_address >= code_alias_low_ &&
            guest_address < code_alias_high_;
