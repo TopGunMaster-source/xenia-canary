@@ -833,6 +833,7 @@ bool Memory::AccessViolationCallback(
             is_write ? "write to" : "read of", user_address);
       }
       user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
+      user_piece_table_key_[piece] = UINT64_MAX;
       xe::memory::Protect(
           user_virtual_membase() + size_t(piece) * kUserSmallPageSize,
           kUserSmallPageSize, UserPieceAccess(piece), nullptr);
@@ -1242,6 +1243,13 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
     // A piece the table had no entry for when the page was split.
     return MapUserPiece(window_offset / kUserSmallPageSize, allow_fallback);
   }
+  // Read before translating and again after, so an entry edited meanwhile
+  // drops the page at the next flush.
+  const uint32_t first_piece = index * kUserSmallPagesPerView;
+  uint64_t table_keys[kUserSmallPagesPerView];
+  for (uint32_t i = 0; i < kUserSmallPagesPerView; ++i) {
+    table_keys[i] = UserPieceTableKey(first_piece + i);
+  }
   // Window offsets carry the 0xE0000000 skew. The page table doesn't.
   const uint32_t skew = UserWindowSkew(window_offset);
   const uint32_t user_address = window_offset - skew;
@@ -1336,7 +1344,6 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
     return false;
   }
   user_page_mapped_[index / 64] |= bit;
-  const uint32_t first_piece = index * kUserSmallPagesPerView;
   std::fill_n(user_piece_access_.begin() + first_piece, kUserSmallPagesPerView,
               uint8_t(state == UserPageState::kMapped
                           ? UserEntryAccess(protection)
@@ -1347,6 +1354,11 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
     for (uint32_t i = 0; i < kUserSmallPagesPerView; ++i) {
       TrackUserPieceChange(first_piece + i, page + i * kUserSmallPageSize);
     }
+  }
+  for (uint32_t i = 0; i < kUserSmallPagesPerView; ++i) {
+    user_piece_table_key_[first_piece + i] =
+        UserPieceTableKey(first_piece + i) == table_keys[i] ? table_keys[i]
+                                                            : UINT64_MAX;
   }
   ProtectUserPieces(first_piece, kUserSmallPagesPerView);
   return true;
@@ -1393,6 +1405,8 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
   }
   const uint32_t window_offset = piece * kUserSmallPageSize;
   const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
+  // Read before translating and again after, as in MapUserPage.
+  const uint64_t table_key = UserPieceTableKey(piece);
   uint32_t physical_address;
   uint32_t protection = 0;
   const UserPageState state =
@@ -1450,6 +1464,8 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
   if (from_entry) {
     TrackUserPieceChange(piece, user_address);
   }
+  user_piece_table_key_[piece] =
+      UserPieceTableKey(piece) == table_key ? table_key : UINT64_MAX;
   ProtectUserPieces(piece, 1);
   return true;
 }
@@ -1640,6 +1656,8 @@ bool Memory::MarkUserPieceChanged(uint32_t window_offset) {
     }
     word &= ~bit;
     written |= uint32_t(1) << i;
+    // The bit was set here, so a guest clearing it is seen as a change.
+    user_piece_table_key_[other] |= kUserEntryChanged;
   }
   // The pieces of a split page are separate views, and one protect can't span
   // two.
@@ -1666,36 +1684,120 @@ bool Memory::MarkUserPieceChanged(uint32_t window_offset) {
   return true;
 }
 
+void Memory::ReleaseUserPage(uint32_t index) {
+  uint8_t* view = user_virtual_membase() + size_t(index) * kUserPageSize;
+  if (user_page_split_.erase(index)) {
+    xe::memory::ReleaseFileViewPages(mapping_, view, kUserPageSize);
+  } else {
+    xe::memory::UnmapFileView(mapping_, view, kUserPageSize);
+  }
+  user_page_mapped_[index / 64] &= ~(uint64_t(1) << (index % 64));
+  for (uint32_t piece = index * kUserSmallPagesPerView;
+       piece < (index + 1) * kUserSmallPagesPerView; ++piece) {
+    user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
+    user_piece_unchanged_[piece / 64] &= ~(uint64_t(1) << (piece % 64));
+    const uint32_t physical_page = user_piece_physical_[piece];
+    if (physical_page == kUserNoPage) {
+      continue;
+    }
+    auto& shown_by = user_block_pieces_[physical_page / kUserSmallPagesPerView];
+    shown_by.erase(std::find(shown_by.begin(), shown_by.end(), piece));
+    user_piece_physical_[piece] = kUserNoPage;
+  }
+}
+
 void Memory::FlushUserPageTable() {
   auto global_lock = global_critical_region_.Acquire();
-  uint8_t* user_membase = user_virtual_membase();
+  for (size_t word = 0; word < user_page_mapped_.size(); word++) {
+    uint64_t bits = user_page_mapped_[word];
+    uint32_t page_in_word;
+    while (xe::bit_scan_forward(bits, &page_in_word)) {
+      bits &= bits - 1;
+      ReleaseUserPage(uint32_t(word * 64 + page_in_word));
+    }
+  }
+}
+
+uint64_t Memory::UserPieceTableKey(uint32_t piece) {
+  if (!user_page_table_) {
+    return 0;
+  }
+  const uint32_t window_offset = piece * kUserSmallPageSize;
+  const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
+  const uint8_t kind = UserSegmentKind(user_address);
+  const uint64_t kind_bits = uint64_t(kind) << 56;
+  if (kind & kUserSegmentLarge) {
+    return kind_bits |
+           xe::load_and_swap<uint32_t>(TranslateVirtual(
+               user_page_table_ + kUserTableLarge + (user_address >> 24) * 4));
+  }
+  const bool is_small = !(kind & kUserSegmentMedium);
+  const uint32_t table = is_small ? kUserTableSmall + (user_address >> 23) * 2
+                                  : kUserTableMedium + (user_address >> 27) * 2;
+  const uint32_t frame =
+      xe::load_and_swap<uint16_t>(TranslateVirtual(user_page_table_ + table));
+  const uint32_t table_address = frame << 13;
+  if (!frame || table_address >= 0x20000000) {
+    return kind_bits | (uint64_t(frame) << 32);
+  }
+  return kind_bits | (uint64_t(frame) << 32) |
+         xe::load_and_swap<uint32_t>(
+             TranslatePhysical(table_address) +
+             ((user_address >> (is_small ? 12 : 16)) & 0x7FF) * 4);
+}
+
+void Memory::FlushChangedUserPages() {
+  auto global_lock = global_critical_region_.Acquire();
+  if (user_page_mapped_.empty()) {
+    return;
+  }
+  // TODO(has207): keys only cover the table, so a page keeps what it showed
+  // when xenia later allocates or frees the physical memory its entry names.
+  uint32_t kept = 0;
+  uint32_t dropped = 0;
   for (size_t word = 0; word < user_page_mapped_.size(); word++) {
     uint64_t bits = user_page_mapped_[word];
     uint32_t page_in_word;
     while (xe::bit_scan_forward(bits, &page_in_word)) {
       bits &= bits - 1;
       const uint32_t index = uint32_t(word * 64 + page_in_word);
-      uint8_t* view = user_membase + size_t(index) * kUserPageSize;
-      if (user_page_split_.erase(index)) {
-        xe::memory::ReleaseFileViewPages(mapping_, view, kUserPageSize);
-      } else {
-        xe::memory::UnmapFileView(mapping_, view, kUserPageSize);
-      }
-      for (uint32_t piece = index * kUserSmallPagesPerView;
-           piece < (index + 1) * kUserSmallPagesPerView; ++piece) {
-        user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
-        user_piece_unchanged_[piece / 64] &= ~(uint64_t(1) << (piece % 64));
-        const uint32_t physical_page = user_piece_physical_[piece];
-        if (physical_page == kUserNoPage) {
+      auto split = user_page_split_.find(index);
+      const uint32_t shown = split != user_page_split_.end()
+                                 ? split->second
+                                 : (1u << kUserSmallPagesPerView) - 1;
+      bool changed = false;
+      for (uint32_t i = 0; i < kUserSmallPagesPerView && !changed; ++i) {
+        if (!(shown & (1u << i))) {
           continue;
         }
-        auto& shown_by =
-            user_block_pieces_[physical_page / kUserSmallPagesPerView];
-        shown_by.erase(std::find(shown_by.begin(), shown_by.end(), piece));
-        user_piece_physical_[piece] = kUserNoPage;
+        const uint32_t piece = index * kUserSmallPagesPerView + i;
+        const uint64_t then = user_piece_table_key_[piece];
+        const uint64_t now = UserPieceTableKey(piece);
+        // Setting the changed bit, as the first write does, leaves the
+        // translation alone. Clearing it has to make the next write fault.
+        changed =
+            now != then && (then & kUserEntryChanged || !(then & UINT32_MAX) ||
+                            now != (then | kUserEntryChanged));
+      }
+      if (changed) {
+        ReleaseUserPage(index);
+        ++dropped;
+      } else {
+        ++kept;
       }
     }
-    user_page_mapped_[word] = 0;
+  }
+  // Under the global lock, so plain counters are fine.
+  static uint32_t flush_count = 0;
+  static uint64_t kept_total = 0;
+  static uint64_t dropped_total = 0;
+  kept_total += kept;
+  dropped_total += dropped;
+  if (xe::is_pow2(++flush_count)) {
+    XELOGI(
+        "Memory: {} user mode TB flushes kept {} mapped pages whose entries "
+        "were unchanged and dropped {}",
+        flush_count, kept_total, dropped_total);
   }
 }
 
@@ -1709,6 +1811,8 @@ bool Memory::EnableUserModeViews() {
                               kUserNoPage);
   user_piece_access_.assign(kUserPageCount * kUserSmallPagesPerView,
                             uint8_t(xe::memory::PageAccess::kReadWrite));
+  user_piece_table_key_.assign(kUserPageCount * kUserSmallPagesPerView,
+                               UINT64_MAX);
   user_piece_unchanged_.assign(kUserPageCount * kUserSmallPagesPerView / 64, 0);
   user_block_pieces_.assign(kPhysicalSmallPageCount / kUserSmallPagesPerView,
                             {});

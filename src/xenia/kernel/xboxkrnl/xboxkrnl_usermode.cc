@@ -692,16 +692,20 @@ void KeContextToKframes_entry(lpvoid_t kframes, lpvoid_t context,
 DECLARE_XBOXKRNL_EXPORT1(KeContextToKframes, kThreading, kImplemented);
 
 // Dropping more than was asked for only costs a fault, so none reads its args.
-void KeFlushUserModeCurrentTb_entry() { kernel_memory()->FlushUserPageTable(); }
+void KeFlushUserModeCurrentTb_entry() {
+  kernel_memory()->FlushChangedUserPages();
+}
 DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeCurrentTb, kMemory, kImplemented);
 
-void KeFlushUserModeTb_entry() { kernel_memory()->FlushUserPageTable(); }
+void KeFlushUserModeTb_entry() { kernel_memory()->FlushChangedUserPages(); }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushUserModeTb, kMemory, kImplemented);
 
-void KeFlushCurrentEntireTb_entry() { kernel_memory()->FlushUserPageTable(); }
+void KeFlushCurrentEntireTb_entry() {
+  kernel_memory()->FlushChangedUserPages();
+}
 DECLARE_XBOXKRNL_EXPORT1(KeFlushCurrentEntireTb, kMemory, kImplemented);
 
-void KeFlushEntireTb_entry() { kernel_memory()->FlushUserPageTable(); }
+void KeFlushEntireTb_entry() { kernel_memory()->FlushChangedUserPages(); }
 DECLARE_XBOXKRNL_EXPORT1(KeFlushEntireTb, kMemory, kImplemented);
 
 }  // namespace xboxkrnl
