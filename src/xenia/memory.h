@@ -886,8 +886,8 @@ class Memory {
   // changed bit, and the write watch on the physical page it shows. Under the
   // lock.
   xe::memory::PageAccess UserPieceAccess(uint32_t piece) const;
-  // Protects |count| pieces from |first_piece|, mapped read-write, to their
-  // UserPieceAccess. Under the lock.
+  // Protects |count| pieces from |first_piece| to their UserPieceAccess,
+  // read-write ones included. Under the lock.
   void ProtectUserPieces(uint32_t first_piece, uint32_t count);
   // Write protects the range's physical pages in every user mode page that
   // shows them. Takes the lock.

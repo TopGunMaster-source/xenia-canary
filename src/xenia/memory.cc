@@ -107,8 +107,15 @@ static Memory* active_memory_ = nullptr;
 // and another allocation can land in a page that hasn't faulted in yet.
 #if XE_PLATFORM_WIN32
 constexpr bool kHoldUserWindow = false;
+// User mode views are mapped with this and committed with no access. A Win32
+// view can't be protected above the access it was mapped with.
+// TODO(has207): a page another view already committed is read-write in the new
+// view until its commit, so a store can land there unchecked.
+constexpr auto kUserViewMapAccess = xe::memory::PageAccess::kReadWrite;
 #else
 constexpr bool kHoldUserWindow = true;
+// mmap makes a POSIX view accessible, so it starts with no access.
+constexpr auto kUserViewMapAccess = xe::memory::PageAccess::kNoAccess;
 #endif  // XE_PLATFORM_WIN32
 
 void CrashDump() {
@@ -1310,10 +1317,11 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
           page, unmapped_count);
     }
   }
-  // Read-write, then protected to what the entry and write watches allow.
+  // Committed with no access, then protected to what the entry and write
+  // watches allow.
   auto view = reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
       mapping_, user_virtual_membase() + window_page, kUserPageSize,
-      xe::memory::PageAccess::kReadWrite,
+      kUserViewMapAccess,
       file_offset & ~uint64_t(system_allocation_granularity_ - 1)));
   if (!view) {
     XELOGE("Memory: unable to show user mode page {:08X}", page);
@@ -1322,7 +1330,7 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
   // The mapping is SEC_RESERVE, so an uncommitted page faults regardless.
   if (!xe::memory::AllocFixed(view, kUserPageSize,
                               xe::memory::AllocationType::kCommit,
-                              xe::memory::PageAccess::kReadWrite)) {
+                              xe::memory::PageAccess::kNoAccess)) {
     XELOGE("Memory: unable to commit user mode page {:08X}", page);
     xe::memory::UnmapFileView(mapping_, view, kUserPageSize);
     return false;
@@ -1424,15 +1432,16 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
   }
   auto view = reinterpret_cast<uint8_t*>(xe::memory::MapFileViewPages(
       mapping_, user_virtual_membase() + window_offset, kUserSmallPageSize,
-      xe::memory::PageAccess::kReadWrite, file_offset));
+      kUserViewMapAccess, file_offset));
   if (!view) {
     XELOGE("Memory: unable to show user mode address {:08X}", user_address);
     return false;
   }
   if (!xe::memory::AllocFixed(view, kUserSmallPageSize,
                               xe::memory::AllocationType::kCommit,
-                              xe::memory::PageAccess::kReadWrite)) {
+                              xe::memory::PageAccess::kNoAccess)) {
     XELOGE("Memory: unable to commit user mode address {:08X}", user_address);
+    xe::memory::ReleaseFileViewPages(mapping_, view, kUserSmallPageSize);
     return false;
   }
   pieces |= bit;
@@ -1505,11 +1514,9 @@ void Memory::ProtectUserPieces(uint32_t first_piece, uint32_t count) {
     while (end < count && UserPieceAccess(first_piece + end) == access) {
       ++end;
     }
-    if (access != xe::memory::PageAccess::kReadWrite) {
-      xe::memory::Protect(
-          user_membase + size_t(first_piece + i) * kUserSmallPageSize,
-          size_t(end - i) * kUserSmallPageSize, access, nullptr);
-    }
+    xe::memory::Protect(
+        user_membase + size_t(first_piece + i) * kUserSmallPageSize,
+        size_t(end - i) * kUserSmallPageSize, access, nullptr);
     i = end;
   }
 }
