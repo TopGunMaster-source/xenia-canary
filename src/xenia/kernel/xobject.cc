@@ -80,13 +80,17 @@ Memory* XObject::memory() const { return kernel_state_->memory(); }
 XObject::Type XObject::type() const { return type_; }
 
 void XObject::RetainHandle() {
-  kernel_state_->object_table()->RetainHandle(handles_[0]);
+  auto global_lock = global_critical_region::AcquireDirect();
+  if (!handles_.empty()) {
+    kernel_state_->object_table()->RetainHandle(handles_[0]);
+  }
 }
 
 bool XObject::ReleaseHandle() {
+  auto global_lock = global_critical_region::AcquireDirect();
   // FIXME: Return true when handle is actually released.
-  return kernel_state_->object_table()->ReleaseHandle(handles_[0]) ==
-         X_STATUS_SUCCESS;
+  return !handles_.empty() && kernel_state_->object_table()->ReleaseHandle(
+                                  handles_[0]) == X_STATUS_SUCCESS;
 }
 
 void XObject::Retain() { ++pointer_ref_count_; }
@@ -142,8 +146,18 @@ void XObject::SetNativeType() {
     return;
   }
 
-  auto header = memory()->TranslateVirtual<X_OBJECT_HEADER*>(
-      guest_object_ptr_ - sizeof(X_OBJECT_HEADER));
+  // ObOpenObjectByPointer takes an Object Manager object, whose body follows
+  // an X_OBJECT_HEADER. Generic dispatch lookups must not inspect this prefix.
+  if (guest_object_ptr_ < sizeof(X_OBJECT_HEADER)) {
+    return;
+  }
+  const uint32_t header_ptr = guest_object_ptr_ - sizeof(X_OBJECT_HEADER);
+  if (!header_ptr ||
+      memory()->QueryRangeAccess(header_ptr, sizeof(X_OBJECT_HEADER)) ==
+          memory::PageAccess::kNoAccess) {
+    return;
+  }
+  auto header = memory()->TranslateVirtual<X_OBJECT_HEADER*>(header_ptr);
 
   guest_object_type_ptr_.store(header->object_type_ptr);
 }
