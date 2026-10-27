@@ -142,6 +142,9 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // |direct| without |tail|, takes any entry. Other lookups take Any entries
   // and check a return site's for a live frame.
   void EmitDynamicCallLookup(bool tail, bool direct = false);
+  // Jumps to the dynamic blr target in x9 on the caller's frame, or falls
+  // through when the records don't allow that.
+  void EmitDropCallingFrame();
   void SetReturnAddress(uint64_t value);
 
   // Backend context register = x19.

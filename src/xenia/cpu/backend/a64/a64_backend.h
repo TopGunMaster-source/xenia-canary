@@ -69,6 +69,9 @@ struct A64BackendStackpoint {
   unsigned guest_return_address_;
 };
 
+// The guest return address host code enters guest code with.
+constexpr uint32_t kHostReturnAddress = 0xBCBCBCBC;
+
 // Which lookups take a dynamic call cache entry.
 enum A64DynamicCallCacheKind : uint32_t {
   kA64DynamicCallAny = 0,
@@ -170,6 +173,9 @@ struct A64BackendContext {
   unsigned int Ox1000;  // constant 0x1000
   // DEFAULT_VMX_FPCR regardless of NJM, for the ops that always flush
   unsigned int fpcr_vmx_daz;
+  // Set by a dynamic call resolve that continues inside a function rather than
+  // at its entry. Emitted code clears it before a lookup and reads it after.
+  unsigned int dynamic_target_in_body;
 };
 
 // Default FPCR for FPU mode (round to nearest, no flush to zero).

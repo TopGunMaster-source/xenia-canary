@@ -1178,6 +1178,9 @@ static uint64_t ResolveDynamicFunction(void* raw_context,
     if (uint64_t return_address = ResolveDynamicReturn(
             guest_context, static_cast<uint32_t>(target_address), pending_pops,
             &is_return_site)) {
+      static_cast<A64Backend*>(guest_context->processor->backend())
+          ->BackendContextForGuestContext(raw_context)
+          ->dynamic_target_in_body = 1;
       return return_address;
     }
   }
@@ -1279,6 +1282,7 @@ static uint64_t ResolveCachedReturnSite(void* raw_context,
   const uint32_t target = static_cast<uint32_t>(target_address);
   if (uint64_t host_address =
           FindLiveReturn(guest_context, target, pending_pops)) {
+    bctx->dynamic_target_in_body = 1;
     return host_address;
   }
   // Read once, as another thread can invalidate the entry meanwhile.
