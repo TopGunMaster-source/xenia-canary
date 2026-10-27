@@ -22,7 +22,7 @@
 #include "xenia/xbox.h"
 
 DEFINE_bool(interlaced, false, "Toggles interlaced mode.", "Video");
-DEFINE_bool(xefu_invalidate_on_swap, true,
+DEFINE_bool(xefu_invalidate_on_swap, false,
             "While XeFu runs, tell the GPU on every VdSwap that all of the "
             "emulated Xbox's memory may have changed (a test: XeFu's user mode "
             "writes through views the GPU doesn't watch).",
