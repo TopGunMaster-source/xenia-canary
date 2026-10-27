@@ -51,6 +51,20 @@ constexpr uint32_t kContextUserModeControl = 0x228;
 constexpr uint32_t kContextControl = 0x1;
 constexpr uint32_t kContextInteger = 0x4;
 
+// Points the JIT's guest addressing at the user mode or kernel address space.
+void SetUserAddressing(PPCContext* context, bool user) {
+  auto memory = kernel_memory();
+  if (user) {
+    context->virtual_membase = memory->user_virtual_membase();
+    context->tlb_read = memory->user_tlb(false);
+    context->tlb_write = memory->user_tlb(true);
+  } else {
+    context->virtual_membase = memory->virtual_membase();
+    context->tlb_read = memory->kernel_tlb();
+    context->tlb_write = memory->kernel_tlb();
+  }
+}
+
 // Trap frame layout. RuntimeHost uses the GPRs, lr and iar. XeFu also uses
 // ctr, cr and xer and sets ctr before resuming. Where msr goes is unknown.
 constexpr uint32_t kKframesSize = XThread::UserMode::kInterruptFrameSize;
@@ -164,7 +178,7 @@ void LeaveUserMode(XThread* thread, uint32_t value) {
   auto context = thread->thread_state()->context();
   user_mode->in_user_code = false;
   user_mode->leave_value = value;
-  context->virtual_membase = kernel_memory()->virtual_membase();
+  SetUserAddressing(context, false);
   auto& registers = user_mode->kernel_registers;
   std::memcpy(context->r, registers.r, sizeof(registers.r));
   context->ctr = registers.ctr;
@@ -191,7 +205,7 @@ bool TrapIntoHandler(PPCContext* context, XThread* thread, uint32_t record,
   auto trapped = user_mode->running;
   user_mode->in_user_code = false;
   thread->SaveInterruptedUserCr();
-  context->virtual_membase = kernel_memory()->virtual_membase();
+  SetUserAddressing(context, false);
   auto kframes = context->TranslateVirtual<uint8_t*>(user_mode->kframes);
   SaveKframes(context, kframes, resume_address);
   trapped->resume_address = resume_address;
@@ -229,7 +243,7 @@ bool TrapIntoHandler(PPCContext* context, XThread* thread, uint32_t record,
 
   *out_address = LoadKframes(context, kframes);
   thread->RestoreInterruptedUserCr();
-  context->virtual_membase = kernel_memory()->user_virtual_membase();
+  SetUserAddressing(context, true);
   user_mode->in_user_code = true;
   return true;
 }
@@ -537,7 +551,7 @@ dword_result_t KeEnterUserMode_entry(lpvoid_t user_context, dword_t handler,
     user_mode->adopted_fiber = xe::threading::Fiber::CreateFromThread();
   }
   user_mode->kernel_fiber = xe::threading::Fiber::GetCurrentFiber();
-  guest_context->virtual_membase = kernel_memory()->user_virtual_membase();
+  SetUserAddressing(guest_context, true);
 
   // The kernel services a trap by entering again at the instruction after it,
   // with the stack pointer it trapped with, so that fiber continues in place.

@@ -105,6 +105,7 @@ bool A64Emitter::Emit(GuestFunction* function, hir::HIRBuilder* builder,
   sequence_samples_.clear();
 
   current_guest_function_ = function->address();
+  guest_tlb_ = processor_->memory()->guest_tlbs_active();
 
   // Reset state.
   stack_size_ = StackLayout::GUEST_STACK_SIZE;
@@ -854,7 +855,8 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
 
 bool A64Emitter::TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
                                               const GuestFunction* function) {
-  if (!function->IsSaverest() ||
+  // The inlined form addresses the stack through the membase.
+  if (guest_tlb_ || !function->IsSaverest() ||
       function->SaverestType() != SaveRestoreType::GPR) {
     return false;
   }

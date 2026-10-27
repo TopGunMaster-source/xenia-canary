@@ -773,6 +773,20 @@ class Memory {
     return user_virtual_membase_.load(std::memory_order_relaxed);
   }
 
+  // On hosts whose pages hold more than one 4 KB page, JIT code translates
+  // guest addresses through tables of host_address - guest_address per 4 KB
+  // guest page, indexed by guest_address >> 12. Null on other hosts.
+  static constexpr uint32_t kGuestTlbEntryCount = 0x100000;
+  const uint64_t* kernel_tlb() const { return guest_tlbs_; }
+  const uint64_t* user_tlb(bool write) const {
+    return guest_tlbs_ ? guest_tlbs_ + kGuestTlbEntryCount * (write ? 2 : 1)
+                       : nullptr;
+  }
+  // Whether the tables are filled, which happens with the user mode views.
+  bool guest_tlbs_active() const {
+    return guest_tlbs_ && user_virtual_membase_.load(std::memory_order_acquire);
+  }
+
   // The kernel address with the same contents as a user mode address.
   uint32_t UserModeKernelAddress(uint32_t user_address) {
     uint32_t physical_address;
@@ -919,6 +933,12 @@ class Memory {
   // Protects the host memory showing |piece| after its access changed. Under
   // the lock.
   void ProtectUserPiece(uint32_t piece);
+  // Commits the guest address tables and points every entry at the kernel
+  // membase or |user_membase|.
+  bool FillGuestTlbs(uint8_t* user_membase);
+  // Points the user table entries of |count| pieces from |first_piece| at what
+  // the pieces show and allow. Under the lock.
+  void UpdateUserTlb(uint32_t first_piece, uint32_t count);
   // Handles a fault at |window_offset| in the user mode views. Under the lock.
   bool UserAccessViolation(global_unique_lock_type& global_lock_locked_once,
                            uint32_t window_offset, bool is_write,
@@ -1084,6 +1104,13 @@ class Memory {
   std::vector<uint64_t> user_host_page_view_;
   static constexpr uint64_t kUserFileAliasSize = 0x120000000ull;
   uint8_t* user_file_alias_ = nullptr;
+  // The kernel, user read and user write tables. A user entry points into
+  // user_file_alias_ where its piece allows the access, else at the window.
+  // TODO(has207): a thread can use an entry briefly after it changes, missing
+  // a new watch or reaching a flushed page.
+  static constexpr size_t kGuestTlbsSize =
+      size_t(kGuestTlbEntryCount) * 3 * sizeof(uint64_t);
+  uint64_t* guest_tlbs_ = nullptr;
   std::atomic<UserFaultHook> user_fault_hook_{nullptr};
 
   std::unique_ptr<cpu::MMIOHandler> mmio_handler_;

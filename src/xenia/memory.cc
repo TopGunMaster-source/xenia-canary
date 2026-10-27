@@ -208,6 +208,11 @@ Memory::~Memory() {
       xe::memory::UnmapFileView(mapping_, user_file_alias_, kUserFileAliasSize);
       user_file_alias_ = nullptr;
     }
+    if (guest_tlbs_) {
+      xe::memory::DeallocFixed(guest_tlbs_, 0,
+                               xe::memory::DeallocationType::kRelease);
+      guest_tlbs_ = nullptr;
+    }
     UnmapViews();
     xe::memory::CloseFileMappingHandle(mapping_, file_name_);
     mapping_base_ = nullptr;
@@ -279,6 +284,18 @@ bool Memory::Initialize() {
         system_page_size_, system_allocation_granularity_,
         static_cast<void*>(virtual_membase_),
         static_cast<void*>(physical_membase_));
+  }
+
+  if (UserHostPagesCoarse()) {
+    // Reserved now so every context can hold the kernel table, which is only
+    // filled and read once the user mode views exist.
+    guest_tlbs_ = static_cast<uint64_t*>(xe::memory::AllocFixed(
+        nullptr, kGuestTlbsSize, xe::memory::AllocationType::kReserve,
+        xe::memory::PageAccess::kNoAccess));
+    if (!guest_tlbs_) {
+      XELOGE("Memory: unable to reserve the guest address tables");
+      return false;
+    }
   }
 
   // Prepare virtual heaps.
@@ -566,6 +583,31 @@ uint32_t Memory::KernelPageTableReadThunk(void* ppc_context, void* context,
 void Memory::KernelPageTableWriteThunk(void* ppc_context, void* context,
                                        uint32_t address, uint32_t value) {
   // The entries describe xenia's heaps, which a write can't change.
+}
+
+bool Memory::FillGuestTlbs(uint8_t* user_membase) {
+  if (!xe::memory::AllocFixed(guest_tlbs_, kGuestTlbsSize,
+                              xe::memory::AllocationType::kCommit,
+                              xe::memory::PageAccess::kReadWrite)) {
+    XELOGE("Memory: unable to commit the guest address tables");
+    return false;
+  }
+  // The tables exist on hosts with pages over 4 KB, where both address spaces
+  // show 0xE0000000 and up 4 KB further in.
+  assert_true(system_allocation_granularity_ > kUserSmallPageSize);
+  constexpr uint32_t skewed_index = 0xE0000000 / kUserSmallPageSize;
+  const uint64_t bases[] = {reinterpret_cast<uint64_t>(virtual_membase_),
+                            reinterpret_cast<uint64_t>(user_membase)};
+  for (uint32_t table = 0; table < 3; ++table) {
+    uint64_t* entries = guest_tlbs_ + size_t(table) * kGuestTlbEntryCount;
+    const uint64_t base = bases[table ? 1 : 0];
+    std::fill_n(entries, skewed_index, base);
+    std::fill_n(entries + skewed_index, kGuestTlbEntryCount - skewed_index,
+                base + kUserSmallPageSize);
+    // The skewed last page wraps at 32 bits, as the membase remap does.
+    entries[kGuestTlbEntryCount - 1] -= 0x100000000ull;
+  }
+  return true;
 }
 
 bool Memory::ClaimUserWindow(uint8_t* user_membase) {
@@ -1496,6 +1538,7 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
     }
     user_piece_table_key_[piece] =
         UserPieceTableKey(piece) == table_key ? table_key : UINT64_MAX;
+    UpdateUserTlb(piece, 1);
     MapUserHostPage(piece & ~(UserPiecesPerHostPage() - 1));
     return true;
   }
@@ -1656,6 +1699,7 @@ void Memory::ProtectUserPiece(uint32_t piece) {
 }
 
 void Memory::ProtectUserHostPages(uint32_t first_piece, uint32_t count) {
+  UpdateUserTlb(first_piece, count);
   const uint32_t pieces_per_host_page = UserPiecesPerHostPage();
   const size_t host_page_size =
       size_t(pieces_per_host_page) * kUserSmallPageSize;
@@ -1682,6 +1726,45 @@ void Memory::ProtectUserHostPages(uint32_t first_piece, uint32_t count) {
     }
     xe::memory::Protect(user_membase + host_page * host_page_size,
                         host_page_size, access, nullptr);
+  }
+}
+
+void Memory::UpdateUserTlb(uint32_t first_piece, uint32_t count) {
+  if (!guest_tlbs_active()) {
+    return;
+  }
+  uint64_t* read_tlb = guest_tlbs_ + kGuestTlbEntryCount;
+  uint64_t* write_tlb = read_tlb + kGuestTlbEntryCount;
+  const uint64_t user_membase =
+      reinterpret_cast<uint64_t>(user_virtual_membase());
+  for (uint32_t piece = first_piece; piece < first_piece + count; ++piece) {
+    const uint32_t window_offset = piece * kUserSmallPageSize;
+    const uint32_t skew = UserWindowSkew(window_offset);
+    // The skew leaves the piece at 0xE0000000 with no user address.
+    if (window_offset == 0xE0000000) {
+      continue;
+    }
+    const uint32_t index = (window_offset - skew) / kUserSmallPageSize;
+    const uint64_t window_entry = user_membase + skew;
+    uint64_t read_entry = window_entry;
+    uint64_t write_entry = window_entry;
+    const uint32_t file_page = user_piece_file_page_[piece];
+    if (file_page != kUserNoPage) {
+      const uint64_t alias_entry =
+          reinterpret_cast<uint64_t>(user_file_alias_) +
+          (uint64_t(file_page) - index) * kUserSmallPageSize;
+      const auto access = UserPieceAccess(piece);
+      if (access != xe::memory::PageAccess::kNoAccess) {
+        read_entry = alias_entry;
+      }
+      if (access == xe::memory::PageAccess::kReadWrite) {
+        write_entry = alias_entry;
+      }
+    }
+    std::atomic_ref<uint64_t>(read_tlb[index])
+        .store(read_entry, std::memory_order_relaxed);
+    std::atomic_ref<uint64_t>(write_tlb[index])
+        .store(write_entry, std::memory_order_relaxed);
   }
 }
 
@@ -1949,6 +2032,7 @@ void Memory::ReleaseUserPage(uint32_t index) {
     shown_by.erase(std::find(shown_by.begin(), shown_by.end(), piece));
     user_piece_physical_[piece] = kUserNoPage;
   }
+  UpdateUserTlb(index * kUserSmallPagesPerView, kUserSmallPagesPerView);
 }
 
 void Memory::FlushUserPageTable() {
@@ -2087,8 +2171,16 @@ bool Memory::EnableUserModeViews() {
   for (uint64_t base = xe::round_up(layout_end, 1ull << 32);
        base < (1ull << 47); base += 1ull << 32) {
     if (ClaimUserWindow(reinterpret_cast<uint8_t*>(base))) {
+      if (guest_tlbs_ && !FillGuestTlbs(reinterpret_cast<uint8_t*>(base))) {
+        if (kHoldUserWindow) {
+          xe::memory::ReleaseFileViewPages(
+              mapping_, reinterpret_cast<uint8_t*>(base), 0x100000000ull);
+        }
+        return false;
+      }
+      // Release so a thread that sees the window sees the filled tables.
       user_virtual_membase_.store(reinterpret_cast<uint8_t*>(base),
-                                  std::memory_order_relaxed);
+                                  std::memory_order_release);
       break;
     }
   }
