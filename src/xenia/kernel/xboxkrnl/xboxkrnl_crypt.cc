@@ -107,7 +107,6 @@ static constexpr uint8_t key39[] = {                 // pirs_retail_public
 const static std::map<uint16_t, std::span<const uint8_t>> key_vault = {
     {0x14, key14},
     {0x15, key15},
-    {0x19, key19},
     {0x39, key39},
 };
 
