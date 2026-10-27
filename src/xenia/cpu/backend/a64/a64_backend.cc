@@ -1068,24 +1068,14 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
   return reinterpret_cast<uint64_t>(code);
 }
 
-// Where a dynamic code branch to the instruction after a call continues in
-// translated code, or 0. While the frame of that call is live, the branch
-// returns into it however many frames it skips or bytes the callee popped, and
-// the stack synchronization helper at the target restores the calling frame
-// recorded here. Once the call has returned, as for setjmp, the guest stack
-// decides how far to unwind. |pending_pops| is how many stackpoints the branch
-// still pops after resolving. |out_is_return_site| tells the caller whether the
-// target follows a call, which is never worth caching.
-static uint64_t ResolveDynamicReturn(ppc::PPCContext* guest_context,
-                                     uint32_t target_address,
-                                     uint32_t pending_pops,
-                                     bool* out_is_return_site) {
-  *out_is_return_site = false;
-  if (!cvars::a64_enable_host_guest_stack_synchronization) {
-    return 0;
-  }
-  auto* processor = guest_context->processor;
-  auto* backend = static_cast<A64Backend*>(processor->backend());
+// The host address in a live frame that a dynamic code branch to the
+// instruction after its call returns to, or 0. The branch returns there however
+// many frames it skips or bytes the callee popped. The stack synchronization
+// helper at the target restores the calling frame recorded here.
+// |pending_pops| is how many stackpoints the branch still pops after resolving.
+static uint64_t FindLiveReturn(ppc::PPCContext* guest_context,
+                               uint32_t target_address, uint32_t pending_pops) {
+  auto* backend = static_cast<A64Backend*>(guest_context->processor->backend());
   auto* backend_context = backend->BackendContextForGuestContext(guest_context);
   const uint32_t depth = backend_context->current_stackpoint_depth;
   const uint32_t live_frames = depth > pending_pops ? depth - pending_pops : 0;
@@ -1121,14 +1111,34 @@ static uint64_t ResolveDynamicReturn(ppc::PPCContext* guest_context,
     }
   }
   if (found_host_address) {
-    // Matching a recorded return address proves the target follows a call.
-    *out_is_return_site = true;
     // The helper restores stackpoints[depth - 1], so this names the calling
     // frame, whose record is the host stack it called with because a64 records
     // one after the prolog allocation.
     backend_context->pending_stackpoint_sync_depth = found_index;
-    return found_host_address;
   }
+  return found_host_address;
+}
+
+// Where a dynamic code branch to the instruction after a call continues in
+// translated code, or 0. While the frame of that call is live, the branch
+// returns into it. Once the call has returned, as for setjmp, the guest stack
+// decides how far to unwind. |pending_pops| is as for FindLiveReturn and
+// |out_is_return_site| tells the caller whether the target follows a call.
+static uint64_t ResolveDynamicReturn(ppc::PPCContext* guest_context,
+                                     uint32_t target_address,
+                                     uint32_t pending_pops,
+                                     bool* out_is_return_site) {
+  *out_is_return_site = false;
+  if (!cvars::a64_enable_host_guest_stack_synchronization) {
+    return 0;
+  }
+  if (uint64_t host_address =
+          FindLiveReturn(guest_context, target_address, pending_pops)) {
+    // Matching a recorded return address proves the target follows a call.
+    *out_is_return_site = true;
+    return host_address;
+  }
+  auto* processor = guest_context->processor;
 
   // Dynamic code has no instruction flags, so recognize the call before it.
   if (target_address < 4) {
@@ -1156,16 +1166,20 @@ static uint32_t DynamicCallCacheIndex(uint32_t guest_address) {
          (kA64DynamicCallCacheSize - 1);
 }
 
-// Resolves a target without an indirection slot and caches it per thread.
+// Resolves a target without an indirection slot and caches it per thread. A
+// direct bl is never a return and skips the return site checks.
 static uint64_t ResolveDynamicFunction(void* raw_context,
                                        uint64_t target_address,
-                                       uint32_t pending_pops) {
+                                       uint32_t pending_pops,
+                                       bool direct = false) {
   auto guest_context = reinterpret_cast<ppc::PPCContext*>(raw_context);
   bool is_return_site = false;
-  if (uint64_t return_address = ResolveDynamicReturn(
-          guest_context, static_cast<uint32_t>(target_address), pending_pops,
-          &is_return_site)) {
-    return return_address;
+  if (!direct) {
+    if (uint64_t return_address = ResolveDynamicReturn(
+            guest_context, static_cast<uint32_t>(target_address), pending_pops,
+            &is_return_site)) {
+      return return_address;
+    }
   }
   const uint64_t sweep_count = guest_context->processor->code_sweep_count();
   auto function = guest_context->processor->ResolveFunction(
@@ -1200,25 +1214,26 @@ static uint64_t ResolveDynamicFunction(void* raw_context,
     bctx->dynamic_call_cache =
         new A64DynamicCallCacheEntry[kA64DynamicCallCacheSize];
     for (uint32_t i = 0; i < kA64DynamicCallCacheSize; ++i) {
-      bctx->dynamic_call_cache[i] = {UINT32_MAX, 0, 0};
+      bctx->dynamic_call_cache[i] = {UINT32_MAX, kA64DynamicCallAny, 0};
     }
   }
-  // A return resolves to an address that is only valid for the unwind that
-  // reached it, and caching the site would skip that unwind on every later
-  // return, so only targets a call can reach are cached.
-  if (!is_return_site) {
-    auto& entry = bctx->dynamic_call_cache[DynamicCallCacheIndex(
-        static_cast<uint32_t>(target_address))];
-    entry.host_address = host_address;
-    entry.guest_address = static_cast<uint32_t>(target_address);
-    // A sweep since the resolve began may have dropped the function before the
-    // entry was there for it to clear. The fence pairs with the sweep's count
-    // bump before it clears entries.
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    if (guest_context->processor->code_sweep_count() != sweep_count) {
-      entry.host_address = 0;
-      entry.guest_address = UINT32_MAX;
-    }
+  // An unwind lands at an address only valid for the frame it found and is
+  // never cached. A return site's entry has a branch look for a live frame
+  // first.
+  auto& entry = bctx->dynamic_call_cache[DynamicCallCacheIndex(
+      static_cast<uint32_t>(target_address))];
+  entry.host_address = host_address;
+  entry.kind = direct           ? kA64DynamicCallDirectOnly
+               : is_return_site ? kA64DynamicCallReturnSite
+                                : kA64DynamicCallAny;
+  entry.guest_address = static_cast<uint32_t>(target_address);
+  // A sweep since the resolve began may have dropped the function before the
+  // entry was there for it to clear. The fence pairs with the sweep's count
+  // bump before it clears entries.
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  if (guest_context->processor->code_sweep_count() != sweep_count) {
+    entry.host_address = 0;
+    entry.guest_address = UINT32_MAX;
   }
   return host_address;
 }
@@ -1227,9 +1242,64 @@ uint64_t ResolveDynamicCall(void* raw_context, uint64_t target_address) {
   return ResolveDynamicFunction(raw_context, target_address, 0);
 }
 
+uint64_t ResolveDirectDynamicCall(void* raw_context, uint64_t target_address) {
+  return ResolveDynamicFunction(raw_context, target_address, 0, true);
+}
+
 // A tail branch pops the current function's stackpoint after resolving.
 uint64_t ResolveDynamicTailCall(void* raw_context, uint64_t target_address) {
   return ResolveDynamicFunction(raw_context, target_address, 1);
+}
+
+// Whether ResolveLongjmp could land a branch inside a function body, which
+// takes the top two live frames being below r1.
+static bool MayResolveLongjmp(ppc::PPCContext* guest_context,
+                              uint32_t pending_pops) {
+  auto bctx = static_cast<A64Backend*>(guest_context->processor->backend())
+                  ->BackendContextForGuestContext(guest_context);
+  const uint32_t depth = bctx->current_stackpoint_depth;
+  if (depth < pending_pops + 3) {
+    return false;
+  }
+  const uint32_t top = depth - pending_pops - 1;
+  const uint32_t stack_pointer = static_cast<uint32_t>(guest_context->r[1]);
+  return stack_pointer > bctx->stackpoints[top].guest_stack_ &&
+         stack_pointer > bctx->stackpoints[top - 1].guest_stack_;
+}
+
+// A branch to a return site with a cached function takes the function unless
+// a live frame returns there or a longjmp could land in a body, which the full
+// resolve handles.
+static uint64_t ResolveCachedReturnSite(void* raw_context,
+                                        uint64_t target_address,
+                                        uint32_t pending_pops) {
+  auto guest_context = reinterpret_cast<ppc::PPCContext*>(raw_context);
+  auto bctx = static_cast<A64Backend*>(guest_context->processor->backend())
+                  ->BackendContextForGuestContext(raw_context);
+  const uint32_t target = static_cast<uint32_t>(target_address);
+  if (uint64_t host_address =
+          FindLiveReturn(guest_context, target, pending_pops)) {
+    return host_address;
+  }
+  // Read once, as another thread can invalidate the entry meanwhile.
+  const auto& entry = bctx->dynamic_call_cache[DynamicCallCacheIndex(target)];
+  const uint64_t cached_address = entry.host_address;
+  if (MayResolveLongjmp(guest_context, pending_pops) ||
+      entry.guest_address != target ||
+      entry.kind != kA64DynamicCallReturnSite || !cached_address) {
+    return ResolveDynamicFunction(raw_context, target_address, pending_pops);
+  }
+  return cached_address;
+}
+
+uint64_t ResolveCachedReturnSiteCall(void* raw_context,
+                                     uint64_t target_address) {
+  return ResolveCachedReturnSite(raw_context, target_address, 0);
+}
+
+uint64_t ResolveCachedReturnSiteTail(void* raw_context,
+                                     uint64_t target_address) {
+  return ResolveCachedReturnSite(raw_context, target_address, 1);
 }
 
 // ==========================================================================
