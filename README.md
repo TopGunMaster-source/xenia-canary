@@ -8,7 +8,7 @@
 
 Xenia Edge is yet another experimental fork of the Xenia emulator, originally based on [Xenia Canary](https://github.com/xenia-canary/xenia-canary). Edge builds have evolved far beyond Canary in many areas, starting from the UI and ranging to kernel emulation, networking, graphics backend features, JIT improvements, arm64 and macOS support, and many others. Exact differences are hard to pin down any longer due to how extensive they are and how much has been ported back into Canary over time to various degrees. In general Edge will run more games, and run them better, but this code is under active development and there are always regressions so YMMV. If something isn't working on Edge it's worth testing on Canary.
 
-While there is no official compatibility tracker for Xenia Edge at the moment, all known games at least get to gameplay and should render more or less correctly and run at their target framerates or better. At least on sufficiently decent hardware (generally RTX 2xxx class and above).
+While there is no official compatibility tracker for Xenia Edge at the moment, all known games at least get to gameplay and should render more or less correctly and run at their target framerates or better. At least on sufficiently decent hardware (generally RTX 2xxx class and above). Some games require game-specific config changes, so make sure to check the [Canary compatibility page](https://github.com/xenia-canary/game-compatibility/issues) if something is wrong, the issue is likely already known and has a documented solution.
 
 ## Status
 
