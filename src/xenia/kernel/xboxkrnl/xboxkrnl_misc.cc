@@ -643,6 +643,86 @@ static void SyncUserPage(uint32_t page, uint32_t* mapped_count,
   }
 }
 
+// Diagnostic (#41): where the alias space maps each x86 page of the emulated
+// Xbox's low 64 MB, against where the Xbox's own page tables (page directory
+// at Xbox physical 0xF000; Xbox RAM at physical 0x10000000) say it should be.
+static void CompareAliasWithXboxPageTables() {
+  auto ram = kernel_memory()->TranslatePhysical<const uint8_t*>(0x10000000u);
+  auto rd32 = [&](uint32_t pa) -> uint32_t {
+    return pa <= 0x04000000u - 4 ? xe::load<uint32_t>(ram + pa) : 0;
+  };
+  auto ours_for = [](uint32_t va) -> uint32_t {
+    if (uint32_t entry = g_alias_entries[va >> 24]) {
+      return (entry & 0x1F000000u) + (va & 0x00FFFFFFu);
+    }
+    uint32_t page = va >> kUserPageShift;
+    if (page < g_alias_has_small.size() && g_alias_has_small[page]) {
+      uint32_t small = g_alias_small[(page << 4) | ((va >> 12) & 15)];
+      return small ? (small & ~3u) + (va & 0xFFFu) : 0;
+    }
+    if (page < g_alias_pages.size() && g_alias_pages[page]) {
+      return (g_alias_pages[page] & ~3u) + (va & 0xFFFFu);
+    }
+    return 0;
+  };
+  uint32_t checked = 0, same = 0, unmapped = 0, wrong = 0, logged = 0;
+  for (uint32_t va = 0; va < 0x04000000u; va += 0x1000) {
+    uint32_t pde = rd32(0xF000 + (va >> 22) * 4);
+    if (!(pde & 1)) {
+      continue;
+    }
+    uint32_t xpa;
+    if (pde & 0x80) {
+      xpa = (pde & 0xFFC00000u) | (va & 0x3FFFFFu);
+    } else {
+      uint32_t pte = rd32((pde & 0xFFFFF000u) + ((va >> 12) & 0x3FF) * 4);
+      if (!(pte & 1)) {
+        continue;
+      }
+      xpa = (pte & 0xFFFFF000u) | (va & 0xFFFu);
+    }
+    if (xpa >= 0x04000000u) {
+      continue;
+    }
+    ++checked;
+    uint32_t expected = 0x10000000u + xpa;
+    uint32_t ours = ours_for(va);
+    if (ours == expected) {
+      ++same;
+    } else if (!ours) {
+      ++unmapped;
+    } else {
+      ++wrong;
+      if (logged++ < 24) {
+        XELOGI(
+            "BACKCOMPAT   x86 page {:08X}: Xbox page tables say physical "
+            "{:08X}, alias space maps {:08X}",
+            va, expected, ours);
+      }
+    }
+  }
+  XELOGI(
+      "BACKCOMPAT alias space vs the Xbox's page tables: {} present pages, "
+      "{} match, {} not mapped in the alias space, {} mapped elsewhere",
+      checked, same, unmapped, wrong);
+  // The constant 0.5 the viewport scale is computed with (x86 0x3B1684).
+  const uint32_t va = 0x3B1684u;
+  uint32_t ours = ours_for(va);
+  uint32_t pde = rd32(0xF000 + (va >> 22) * 4);
+  uint32_t pte = rd32((pde & 0xFFFFF000u) + ((va >> 12) & 0x3FF) * 4);
+  uint32_t expected = 0x10000000u + ((pte & 0xFFFFF000u) | (va & 0xFFFu));
+  XELOGI(
+      "BACKCOMPAT   x86 {:08X}: Xbox page tables {:08X} (holds {:08X}), "
+      "alias space {:08X} (holds {:08X})",
+      va, expected,
+      xe::load<uint32_t>(
+          kernel_memory()->TranslatePhysical<const uint8_t*>(expected)),
+      ours,
+      ours ? xe::load<uint32_t>(
+                 kernel_memory()->TranslatePhysical<const uint8_t*>(ours))
+           : 0);
+}
+
 // Brings the alias space in line with xefu's page table.
 static bool SyncUserSpace() {
   XEFU_PHASE();
@@ -1989,6 +2069,7 @@ static void StartUserModeHeartbeat(cpu::ppc::PPCContext* pc) {
             XELOGI("BACKCOMPAT   wrote the Xbox's RAM to {}",
                    xe::path_to_utf8(path));
           }
+          CompareAliasWithXboxPageTables();
           // And xefu's user-mode runtime and translated code (16 MB pages
           // B8 and B9: physical 0x08000000 and 0x09000000).
           auto code_path =
