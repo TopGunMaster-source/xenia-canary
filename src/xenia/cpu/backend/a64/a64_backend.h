@@ -176,6 +176,11 @@ struct A64BackendContext {
   // Set by a dynamic call resolve that continues inside a function rather than
   // at its entry. Emitted code clears it before a lookup and reads it after.
   unsigned int dynamic_target_in_body;
+  // The stackpoint depth, host stack pointer and return address of the frame
+  // host code entered, which the return to host helper restores.
+  unsigned int host_return_stackpoint_depth;
+  uint64_t host_return_stack;
+  uint64_t host_return_address;
 };
 
 // Default FPCR for FPU mode (round to nearest, no flush to zero).
@@ -214,6 +219,7 @@ class A64Backend : public Backend {
   ~A64Backend() override;
 
   A64CodeCache* code_cache() const { return code_cache_.get(); }
+  void* return_to_host_helper() const { return return_to_host_helper_; }
   uintptr_t emitter_data() const { return emitter_data_; }
 
   std::string name() const override { return "a64"; }
@@ -292,6 +298,7 @@ class A64Backend : public Backend {
   GuestToHostThunk guest_to_host_thunk_no_vec_ = nullptr;
   ResolveFunctionThunk resolve_function_thunk_ = nullptr;
   void* synchronize_guest_and_host_stack_helper_ = nullptr;
+  void* return_to_host_helper_ = nullptr;
   void* vrsqrtefp_scalar_helper_ = nullptr;
   void* vrsqrtefp_vector_helper_ = nullptr;
   void* frsqrte_helper_ = nullptr;

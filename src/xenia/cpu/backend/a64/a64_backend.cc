@@ -99,6 +99,7 @@ class A64HelperEmitter : public A64Emitter {
   GuestToHostThunk EmitGuestToHostThunkNoVec();
   ResolveFunctionThunk EmitResolveFunctionThunk();
   void* EmitGuestAndHostSynchronizeStackHelper();
+  void* EmitReturnToHostHelper();
   void* EmitVRsqrtefpHelper(void** out_vector_entry);
   void* EmitFrsqrteHelper();
 
@@ -300,6 +301,9 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   //   x29, x30     sp + 0x1C0
   //   Total: 0x1D0 = 464 bytes (16-byte aligned)
   const size_t g2h_stack = 464;
+  // x30's slot in the x29/x30 pair at the top of the frame.
+  constexpr int32_t lr_offset = 0x1C8;
+  static_assert(g2h_stack - lr_offset == StackLayout::THUNK_CALLER_RET_ADDR);
   sub(sp, sp, static_cast<uint32_t>(g2h_stack));
   code_offsets.prolog_stack_alloc = getSize();
 
@@ -319,7 +323,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   stp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x180));
   stp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x1A0));
   // Save x29/x30 (FP/LR).
-  stp(x29, x30, ptr(sp, 0x1C0));
+  stp(x29, x30, ptr(sp, lr_offset - 8));
 
   code_offsets.body = getSize();
 
@@ -341,7 +345,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   code_offsets.epilog = getSize();
 
   // Restore.
-  ldp(x29, x30, ptr(sp, 0x1C0));
+  ldp(x29, x30, ptr(sp, lr_offset - 8));
   ldp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x1A0));
   ldp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x180));
   ldp(Xbyak_aarch64::QReg(26), Xbyak_aarch64::QReg(27), ptr(sp, 0x160));
@@ -371,7 +375,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = g2h_stack;
-  func_info.lr_save_offset = 0x1C8;  // stp x29, x30, [sp, #0x1C0]
+  func_info.lr_save_offset = lr_offset;
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<GuestToHostThunk>(fn);
@@ -398,9 +402,11 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunkNoVec() {
   code_offsets.prolog = getSize();
 
   const size_t g2h_stack = 16;  // x29/x30 only
+  constexpr int32_t lr_offset = 0x08;
+  static_assert(g2h_stack - lr_offset == StackLayout::THUNK_CALLER_RET_ADDR);
   sub(sp, sp, static_cast<uint32_t>(g2h_stack));
   code_offsets.prolog_stack_alloc = getSize();
-  stp(x29, x30, ptr(sp, 0x00));
+  stp(x29, x30, ptr(sp, lr_offset - 8));
 
   code_offsets.body = getSize();
 
@@ -412,7 +418,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunkNoVec() {
 
   code_offsets.epilog = getSize();
 
-  ldp(x29, x30, ptr(sp, 0x00));
+  ldp(x29, x30, ptr(sp, lr_offset - 8));
   add(sp, sp, static_cast<uint32_t>(g2h_stack));
   ret();
 
@@ -427,7 +433,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunkNoVec() {
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = g2h_stack;
-  func_info.lr_save_offset = 0x08;  // stp x29, x30, [sp, #0x00]
+  func_info.lr_save_offset = lr_offset;
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<GuestToHostThunk>(fn);
@@ -580,6 +586,52 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   L(underflow);
   // Should be impossible — stackpoint array underflowed.
   brk(0xF001);  // assertion failure
+
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
+
+  EmitFunctionInfo func_info = {};
+  func_info.code_size.total = getSize();
+  func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
+  func_info.code_size.body = code_offsets.epilog - code_offsets.body;
+  func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
+  func_info.prolog_stack_alloc_offset =
+      code_offsets.prolog_stack_alloc - code_offsets.prolog;
+  func_info.stack_size = 0;
+
+  return Emplace(func_info);
+}
+
+// --------------------------------------------------------------------------
+// ReturnToHostHelper
+// --------------------------------------------------------------------------
+// Branched to in place of a dynamic code target that is the host return
+// address. ResolveHostReturn recorded the frame host code entered, which
+// returns there as its epilog would.
+void* A64HelperEmitter::EmitReturnToHostHelper() {
+  struct {
+    size_t prolog;
+    size_t prolog_stack_alloc;
+    size_t body;
+    size_t epilog;
+    size_t tail;
+  } code_offsets = {};
+
+  code_offsets.prolog = getSize();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
+
+  ldr(w9, ptr(x19, static_cast<uint32_t>(offsetof(
+                       A64BackendContext, host_return_stackpoint_depth))));
+  str(w9, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, current_stackpoint_depth))));
+  ldr(x30, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext, host_return_address))));
+  ldr(x9, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, host_return_stack))));
+  mov(sp, x9);
+  ret();
 
   code_offsets.epilog = getSize();
   code_offsets.tail = getSize();
@@ -993,6 +1045,27 @@ bool A64Backend::ReservedStore64(ppc::PPCContext* context, uint32_t address,
 // ResolveFunction — runtime function resolution.
 // ==========================================================================
 
+// The function the live frame stackpoints[index] runs, from the address its
+// call into the next frame returns to, or else its call into host code.
+static A64Function* LookupFrameFunction(A64Backend* backend,
+                                        const A64BackendStackpoint* stackpoints,
+                                        uint32_t index, uint32_t depth) {
+  auto* code_cache = backend->code_cache();
+  if (index + 1 < depth) {
+    // The next frame's prolog saved it, unless host code entered that frame.
+    if (auto* function = static_cast<A64Function*>(
+            code_cache->LookupFunction(*reinterpret_cast<const uint64_t*>(
+                stackpoints[index + 1].host_stack_ +
+                StackLayout::HOST_RET_ADDR)))) {
+      return function;
+    }
+  }
+  // Otherwise the frame is in a call through a thunk, which saved x30 below it.
+  return static_cast<A64Function*>(code_cache->LookupFunction(
+      *reinterpret_cast<const uint64_t*>(stackpoints[index].host_stack_ -
+                                         StackLayout::THUNK_CALLER_RET_ADDR)));
+}
+
 // Where a return site in an already translated function continues, when the
 // guest is unwinding to it past more than one frame, or 0. The caller decides
 // that |target_address| is a return site. |pending_pops| is how many
@@ -1068,6 +1141,36 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
   return reinterpret_cast<uint64_t>(code);
 }
 
+// Where a dynamic code branch to kHostReturnAddress continues, or 0. Guest code
+// can divert its return and branch to the saved address from deeper frames, as
+// XeFu's trap handler does, so the branch returns to host code from the
+// innermost frame host code entered. That can be the frame a tail branch is
+// about to pop, which returning pops anyway.
+static uint64_t ResolveHostReturn(ppc::PPCContext* guest_context) {
+  auto* backend = static_cast<A64Backend*>(guest_context->processor->backend());
+  auto* backend_context = backend->BackendContextForGuestContext(guest_context);
+  const uint32_t depth = backend_context->current_stackpoint_depth;
+  for (uint32_t i = depth; i-- > 0;) {
+    const uint64_t frame = backend_context->stackpoints[i].host_stack_;
+    // A tail call passes the address on to the function taking the frame.
+    if (*reinterpret_cast<const uint32_t*>(
+            frame + StackLayout::GUEST_RET_ADDR) != kHostReturnAddress) {
+      continue;
+    }
+    auto* function =
+        LookupFrameFunction(backend, backend_context->stackpoints, i, depth);
+    if (!function) {
+      return 0;
+    }
+    backend_context->host_return_stackpoint_depth = i;
+    backend_context->host_return_stack = frame + function->stack_size();
+    backend_context->host_return_address =
+        *reinterpret_cast<const uint64_t*>(frame + StackLayout::HOST_RET_ADDR);
+    return reinterpret_cast<uint64_t>(backend->return_to_host_helper());
+  }
+  return 0;
+}
+
 // The host address in a live frame that a dynamic code branch to the
 // instruction after its call returns to, or 0. The branch returns there however
 // many frames it skips or bytes the callee popped. The stack synchronization
@@ -1131,6 +1234,9 @@ static uint64_t ResolveDynamicReturn(ppc::PPCContext* guest_context,
   *out_is_return_site = false;
   if (!cvars::a64_enable_host_guest_stack_synchronization) {
     return 0;
+  }
+  if (target_address == kHostReturnAddress) {
+    return ResolveHostReturn(guest_context);
   }
   if (uint64_t host_address =
           FindLiveReturn(guest_context, target_address, pending_pops)) {
@@ -1455,6 +1561,7 @@ bool A64Backend::Initialize(Processor* processor) {
   if (cvars::a64_enable_host_guest_stack_synchronization) {
     synchronize_guest_and_host_stack_helper_ =
         thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
+    return_to_host_helper_ = thunk_emitter.EmitReturnToHostHelper();
   }
 
   vrsqrtefp_scalar_helper_ =
