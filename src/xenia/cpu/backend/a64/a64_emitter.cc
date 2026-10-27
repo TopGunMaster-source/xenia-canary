@@ -776,7 +776,12 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
 
   auto fn = static_cast<A64Function*>(function);
 
-  if (fn->machine_code()) {
+  // Calls to dynamic code look the target up every time, since a direct call
+  // would keep reaching the old copy once the code is rewritten.
+  const bool rewritable = processor()->dynamic_code_enabled() &&
+                          code_cache_->has_indirection_table() &&
+                          !code_cache_->HasIndirectionSlot(function->address());
+  if (fn->machine_code() && !rewritable) {
     // Direct call — function is already compiled.
     mov(x9, reinterpret_cast<uint64_t>(fn->machine_code()));
     if (!(instr->flags & hir::CALL_TAIL)) {

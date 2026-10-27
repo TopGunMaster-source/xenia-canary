@@ -14,9 +14,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "xenia/base/bit_map.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/mutex.h"
 #include "xenia/cpu/backend/backend.h"
 
 namespace xe {
@@ -222,6 +224,7 @@ class A64Backend : public Backend {
   void InitializeBackendContext(void* ctx) override;
   void DeinitializeBackendContext(void* ctx) override;
   void PrepareForReentry(void* ctx) override;
+  void InvalidateDynamicCalls(uint32_t start, uint32_t end) override;
   static A64BackendStackpoint* AllocStackpoints();
   void* CreateStackpointState() override;
   void DestroyStackpointState(void* state) override;
@@ -277,6 +280,9 @@ class A64Backend : public Backend {
   void* frsqrte_helper_ = nullptr;
 
   alignas(64) ReserveHelper reserve_helper_;
+  // The registered backend contexts, whose dynamic call caches a sweep clears.
+  xe::global_critical_region global_critical_region_;
+  std::vector<void*> backend_contexts_;
   BitMap guest_trampoline_address_bitmap_;
   uint8_t* guest_trampoline_memory_ = nullptr;
   bool guest_trampolines_sub4gb_ = false;
