@@ -135,6 +135,9 @@ class X64HelperEmitter : public X64Emitter {
   void EmitLoadVolatileRegs();
   void EmitSaveNonvolatileRegs();
   void EmitLoadNonvolatileRegs();
+  // Saves the host MXCSR for the return and enters the guest's scalar mode.
+  // rsi must hold the context.
+  void EmitEnterGuestMxcsr();
 };
 
 #if XE_PLATFORM_WIN32
@@ -703,9 +706,11 @@ HostToGuestThunk X64HelperEmitter::EmitHostToGuestThunk() {
   mov(rax, rcx);
   mov(rsi, rdx);                                                    // context
   mov(rdi, ptr[rdx + offsetof(ppc::PPCContext, virtual_membase)]);  // membase
+  EmitEnterGuestMxcsr();
   mov(rcx, r8);  // return address
   call(rax);
   vzeroupper();
+  vldmxcsr(dword[rsp + offsetof(StackLayout::Thunk, host_mxcsr)]);
   EmitLoadNonvolatileRegs();
 
   code_offsets.epilog = getSize();
@@ -746,8 +751,10 @@ HostToGuestThunk X64HelperEmitter::EmitHostToGuestThunk() {
   // need it preserved)
   mov(qword[rsp + offsetof(StackLayout::Thunk, xmm[0])], rsi);
   mov(rdi, ptr[rsi + offsetof(ppc::PPCContext, virtual_membase)]);  // membase
+  EmitEnterGuestMxcsr();
   mov(rcx, rdx);  // return address
   call(rax);
+  vldmxcsr(dword[rsp + offsetof(StackLayout::Thunk, host_mxcsr)]);
   // Restore context register
   mov(rsi, qword[rsp + offsetof(StackLayout::Thunk, xmm[0])]);
 
@@ -777,6 +784,22 @@ HostToGuestThunk X64HelperEmitter::EmitHostToGuestThunk() {
 }
 
 GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
+  // Host C code runs with the default MXCSR (round to nearest, no FTZ or DAZ),
+  // not the guest's scalar or VMX mode. No GPR is touched, so args survive.
+  auto enter_host_mxcsr = [this]() {
+    constexpr uint32_t kHostMxcsr = 0x1F80;
+    auto scratch =
+        GetBackendCtxPtr(offsetof(X64BackendContext, helper_scratch_u32s[0]));
+    scratch.setBit(32);
+    Xbyak::Label host_mxcsr_ready;
+    vstmxcsr(scratch);
+    cmp(scratch, kHostMxcsr);
+    je(host_mxcsr_ready);
+    mov(scratch, kHostMxcsr);
+    vldmxcsr(scratch);
+    L(host_mxcsr_ready);
+  };
+
 #if XE_PLATFORM_WIN32
   // rcx = target function
   // rdx = arg0
@@ -798,6 +821,7 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   vzeroupper();
   // Save off volatile registers.
   EmitSaveVolatileRegs();
+  enter_host_mxcsr();
 
   mov(rax, rcx);              // function
   mov(rcx, GetContextReg());  // context
@@ -807,6 +831,7 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
   // so later guest FP ops observe the correct PPC rounding state.
   vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
+  btr(GetBackendFlagsPtr(), kX64BackendMXCSRModeBit);
 
   code_offsets.epilog = getSize();
 
@@ -846,6 +871,7 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
 
   // Save off volatile registers.
   EmitSaveVolatileRegs();
+  enter_host_mxcsr();
 
   mov(rax, rcx);              // function
   mov(rdi, GetContextReg());  // context
@@ -858,6 +884,7 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
   // so later guest FP ops observe the correct PPC rounding state.
   vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
+  btr(GetBackendFlagsPtr(), kX64BackendMXCSRModeBit);
 
   code_offsets.epilog = getSize();
 
@@ -1737,6 +1764,12 @@ void X64HelperEmitter::EmitLoadVolatileRegs() {
   vmovups(xmm3, qword[rsp + offsetof(StackLayout::Thunk, xmm[3])]);
   vmovups(xmm4, qword[rsp + offsetof(StackLayout::Thunk, xmm[4])]);
   vmovups(xmm5, qword[rsp + offsetof(StackLayout::Thunk, xmm[5])]);
+}
+
+void X64HelperEmitter::EmitEnterGuestMxcsr() {
+  vstmxcsr(dword[rsp + offsetof(StackLayout::Thunk, host_mxcsr)]);
+  vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
+  btr(GetBackendFlagsPtr(), kX64BackendMXCSRModeBit);
 }
 
 void X64HelperEmitter::EmitSaveNonvolatileRegs() {
