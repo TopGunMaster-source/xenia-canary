@@ -103,6 +103,11 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Cost:** one pair of test runs.
 * **Rule:** before relying on a setting, check that the code behind it is in the build being run.
 
+### 21. Tested the wrong memory range and called the idea ruled out
+* **What:** to test whether the GPU draws from stale copies of the Xbox's memory, a build invalidated physical `06000000`-`0EFFFFFF` on every frame. That range came from XeFu's user segments; the Xbox's RAM is physical `10000000`-`13FFFFFF`, as our own RAM dump code already said. The test stayed black and was reported as ruling the idea out.
+* **Cost:** about 20 minutes of test runs, and a wrong conclusion on the wiki for a few hours.
+* **Rule:** before a test, check that it touches the thing it's meant to test, from the code that already knows (here, the RAM dump), not from a guess.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
