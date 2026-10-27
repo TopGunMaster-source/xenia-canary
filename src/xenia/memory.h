@@ -874,11 +874,12 @@ class Memory {
   // Maps the page a fault at |window_offset| falls in, under the lock.
   // Without |allow_fallback|, a page the table doesn't map stays unmapped.
   bool MapUserPage(uint32_t window_offset, bool allow_fallback);
-  // Maps user mode page |index| as one 4 KB view per entry, for entries no
-  // single view can show. Entries the table doesn't have stay unmapped and
-  // fault. Under the lock.
+  // Shows user mode page |index| per 4 KB piece, for entries no single view can
+  // show. Entries the table doesn't have stay unshown and fault. Under the
+  // lock.
   bool SplitUserPage(uint32_t index);
-  // Maps one 4 KB piece of a split page. Under the lock.
+  // Shows one 4 KB piece of a split page, in a view of its own on 4 KB hosts
+  // and through its host page on others. Under the lock.
   bool MapUserPiece(uint32_t piece, bool allow_fallback);
   // Unmaps user mode page |index| and forgets what its pieces showed. Under
   // the lock.
@@ -886,6 +887,49 @@ class Memory {
   // The descriptor and table words the translation of |piece| reads: kind,
   // table frame and entry. Under the lock.
   uint64_t UserPieceTableKey(uint32_t piece);
+  // The file offset and access a piece shows, from its entry or, with
+  // |allow_fallback|, the kernel address space. Under the lock.
+  bool ResolveUserPiece(uint32_t piece, bool allow_fallback,
+                        uint64_t* out_file_offset, bool* out_from_entry,
+                        xe::memory::PageAccess* out_access);
+  // Whether host pages hold more than one piece, so a split page is shown per
+  // host page and the rest is emulated.
+  bool UserHostPagesCoarse() const {
+    return system_page_size_ > kUserSmallPageSize;
+  }
+  uint32_t UserPiecesPerHostPage() const {
+    return system_page_size_ / kUserSmallPageSize;
+  }
+  // Maps the host page from |first_piece| as one view if its pieces show
+  // consecutive file pages. Under the lock.
+  void MapUserHostPage(uint32_t first_piece);
+  void SetUserHostPagesView(uint32_t first_piece, uint32_t count, bool view);
+  // Whether the host page holding |piece| is a view, always false on host pages
+  // of one piece.
+  bool UserHostPageIsView(uint32_t piece) const {
+    if (!UserHostPagesCoarse()) {
+      return false;
+    }
+    const uint32_t host_page = piece / UserPiecesPerHostPage();
+    return (user_host_page_view_[host_page / 64] >> (host_page % 64)) & 1;
+  }
+  // Protects the host pages holding |count| pieces from |first_piece| to the
+  // strictest access of their pieces. Under the lock.
+  void ProtectUserHostPages(uint32_t first_piece, uint32_t count);
+  // Protects the host memory showing |piece| after its access changed. Under
+  // the lock.
+  void ProtectUserPiece(uint32_t piece);
+  // Handles a fault at |window_offset| in the user mode views. Under the lock.
+  bool UserAccessViolation(global_unique_lock_type& global_lock_locked_once,
+                           uint32_t window_offset, bool is_write,
+                           Exception* ex);
+  // Runs the faulting access to a piece that allows it against the memory the
+  // piece shows. Under the lock.
+  bool EmulateUserAccess(global_unique_lock_type& global_lock_locked_once,
+                         Exception* ex);
+  static uint8_t* TranslateEmulatedUserAccess(void* context, uint64_t address,
+                                              bool is_write, size_t* span,
+                                              bool* natively_readable);
   // Records the physical memory |count| user mode pieces from |first_piece|
   // show. Under the lock.
   void TrackUserPieces(uint32_t first_piece, uint32_t count,
@@ -1013,7 +1057,7 @@ class Memory {
   uint32_t user_page_table_ = 0;
   // One bit per user mode page mapped from the table, under the global lock.
   std::vector<uint64_t> user_page_mapped_;
-  // The split pages among them, with a bit per 4 KB piece that has a view.
+  // The split pages among them, with a bit per 4 KB piece that is shown.
   std::unordered_map<uint32_t, uint16_t> user_page_split_;
   // The user mode views are one more alias of physical memory and writes
   // through them have to reach the same watches. All under the global lock.
@@ -1033,7 +1077,13 @@ class Memory {
   // A bit per 4 KB piece whose entry allows writes with its changed bit clear,
   // kept read-only so its first write can set the bit.
   std::vector<uint64_t> user_piece_unchanged_;
-  bool user_write_watches_ = false;
+  // On host pages bigger than a piece, the file page each piece shows, and a
+  // bit per host page mapped as a view. An access to any other host page is
+  // emulated through user_file_alias_, which maps the whole file.
+  std::vector<uint32_t> user_piece_file_page_;
+  std::vector<uint64_t> user_host_page_view_;
+  static constexpr uint64_t kUserFileAliasSize = 0x120000000ull;
+  uint8_t* user_file_alias_ = nullptr;
   std::atomic<UserFaultHook> user_fault_hook_{nullptr};
 
   std::unique_ptr<cpu::MMIOHandler> mmio_handler_;

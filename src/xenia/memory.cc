@@ -21,10 +21,12 @@
 #endif
 
 #include "third_party/fmt/include/fmt/format.h"
+#include "xenia/base/arm64_load_store.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/threading.h"
@@ -201,6 +203,10 @@ Memory::~Memory() {
     if (kHoldUserWindow && user_virtual_membase()) {
       xe::memory::ReleaseFileViewPages(mapping_, user_virtual_membase(),
                                        0x100000000ull);
+    }
+    if (user_file_alias_) {
+      xe::memory::UnmapFileView(mapping_, user_file_alias_, kUserFileAliasSize);
+      user_file_alias_ = nullptr;
     }
     UnmapViews();
     xe::memory::CloseFileMappingHandle(mapping_, file_name_);
@@ -802,97 +808,8 @@ bool Memory::AccessViolationCallback(
     return false;
   }
   if (user_mode) {
-    const uint32_t window_offset = uint32_t(host - user_membase);
-    // The guest's name for the address, without the 0xE0000000 skew.
-    const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
-    // An access the entry's protection forbids is the guest's fault, as the
-    // MMU raises it, whatever watches the page.
-    const uint32_t piece = window_offset / kUserSmallPageSize;
-    const auto entry_access = xe::memory::PageAccess(user_piece_access_[piece]);
-    if (entry_access == xe::memory::PageAccess::kNoAccess ||
-        (is_write && entry_access == xe::memory::PageAccess::kReadOnly)) {
-      auto hook = user_fault_hook_.load(std::memory_order_relaxed);
-      if (hook) {
-        global_lock_locked_once.unlock();
-        const UserFaultResult taken = hook(user_address, is_write, ex);
-        global_lock_locked_once.lock();
-        if (taken != UserFaultResult::kNotTaken) {
-          // Diverted, or the handler returned and the access runs again.
-          return true;
-        }
-      }
-      // With no guest handler to raise it to, or host code faulting on the
-      // guest's behalf, let the access through. The piece stays read-write
-      // until the next flush.
-      static bool reported = false;
-      if (!reported) {
-        reported = true;
-        XELOGW(
-            "Memory: user mode {} {:08X} breaks its entry's protection and no "
-            "handler took it, so it is allowed",
-            is_write ? "write to" : "read of", user_address);
-      }
-      user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
-      user_piece_table_key_[piece] = UINT64_MAX;
-      xe::memory::Protect(
-          user_virtual_membase() + size_t(piece) * kUserSmallPageSize,
-          kUserSmallPageSize, UserPieceAccess(piece), nullptr);
-      return true;
-    }
-    if (is_write) {
-      // The entry's first write and a watch can hold the piece read-only at
-      // once, so settle both before the access runs again.
-      const bool changed = MarkUserPieceChanged(window_offset);
-      if (TriggerUserWriteWatch(window_offset) || changed) {
-        return true;
-      }
-    }
-    // A write runs as soon as its page shows, so settle the entry's first write
-    // and a watch now rather than in another fault.
-    const auto mapped = [&] {
-      if (is_write) {
-        MarkUserPieceChanged(window_offset);
-        TriggerUserWriteWatch(window_offset);
-      }
-      return true;
-    };
-    if (user_page_table_) {
-      if (MapUserPage(window_offset, false)) {
-        return mapped();
-      }
-      // With no entry or no table page, the guest can fill the entry in. Its
-      // handler runs guest code, so drop the lock around it.
-      // TODO(has207): this only drops one level of the recursive lock, so a
-      // thread that already held it runs the handler still holding it.
-      uint32_t unused_physical_address;
-      const UserPageState state =
-          TranslateUserPage(user_address, &unused_physical_address);
-      auto hook = user_fault_hook_.load(std::memory_order_relaxed);
-      if (hook && (state == UserPageState::kNoEntry ||
-                   state == UserPageState::kNoTable)) {
-        global_lock_locked_once.unlock();
-        const UserFaultResult taken = hook(user_address, is_write, ex);
-        global_lock_locked_once.lock();
-        if (taken == UserFaultResult::kDiverted) {
-          // The fault took the access over, so there is nothing to map now.
-          return true;
-        }
-        if (taken == UserFaultResult::kTaken &&
-            MapUserPage(window_offset, false)) {
-          // Under the global lock, so a plain counter is fine.
-          static uint32_t filled_count = 0;
-          if (xe::is_pow2(++filled_count)) {
-            XELOGI(
-                "The guest filled the page table entry for {:08X} it was "
-                "handed the fault for ({} pages so far)",
-                user_address & ~(kUserPageSize - 1), filled_count);
-          }
-          return mapped();
-        }
-      }
-    }
-    // Nothing the table can map so show the kernel address space there.
-    return MapUserPage(window_offset, true) && mapped();
+    return UserAccessViolation(global_lock_locked_once,
+                               uint32_t(host - user_membase), is_write, ex);
   }
   uint32_t virtual_address = HostToGuestVirtual(host_address);
   BaseHeap* heap = LookupHeap(virtual_address);
@@ -948,6 +865,111 @@ bool Memory::AccessViolationCallback(
                                         virtual_address, is_write);
   return physical_heap->TriggerCallbacks(std::move(global_lock_locked_once),
                                          virtual_address, 1, is_write, false);
+}
+
+bool Memory::UserAccessViolation(
+    global_unique_lock_type& global_lock_locked_once, uint32_t window_offset,
+    bool is_write, Exception* ex) {
+  // The guest's name for the address, without the 0xE0000000 skew.
+  const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
+  // An access the entry's protection forbids is the guest's fault, as the
+  // MMU raises it, whatever watches the page.
+  const uint32_t piece = window_offset / kUserSmallPageSize;
+  const auto entry_access = xe::memory::PageAccess(user_piece_access_[piece]);
+  if (entry_access == xe::memory::PageAccess::kNoAccess ||
+      (is_write && entry_access == xe::memory::PageAccess::kReadOnly)) {
+    auto hook = user_fault_hook_.load(std::memory_order_relaxed);
+    if (hook) {
+      global_lock_locked_once.unlock();
+      const UserFaultResult taken = hook(user_address, is_write, ex);
+      global_lock_locked_once.lock();
+      if (taken != UserFaultResult::kNotTaken) {
+        // Diverted, or the handler returned and the access runs again.
+        return true;
+      }
+    }
+    // With no guest handler to raise it to, or host code faulting on the
+    // guest's behalf, let the access through. The piece stays read-write
+    // until the next flush.
+    static bool reported = false;
+    if (!reported) {
+      reported = true;
+      XELOGW(
+          "Memory: user mode {} {:08X} breaks its entry's protection and no "
+          "handler took it, so it is allowed",
+          is_write ? "write to" : "read of", user_address);
+    }
+    user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
+    user_piece_table_key_[piece] = UINT64_MAX;
+    ProtectUserPiece(piece);
+    return true;
+  }
+  if (is_write) {
+    // Sets only this piece's changed bit, but fires the watches of every piece
+    // a view of the host page shows, since those hold it read-only too.
+    bool settled = MarkUserPieceChanged(window_offset);
+    const bool whole_host_page = UserHostPageIsView(piece);
+    const uint32_t first_piece =
+        whole_host_page ? piece & ~(UserPiecesPerHostPage() - 1) : piece;
+    const uint32_t piece_count = whole_host_page ? UserPiecesPerHostPage() : 1;
+    for (uint32_t i = 0; i < piece_count; ++i) {
+      settled |= TriggerUserWriteWatch((first_piece + i) * kUserSmallPageSize);
+    }
+    if (settled) {
+      return true;
+    }
+  }
+  if (UserHostPagesCoarse() && user_piece_file_page_[piece] != kUserNoPage) {
+    // The piece shows and allows the access, so another piece's protection or
+    // a host page no view can show stopped it.
+    return EmulateUserAccess(global_lock_locked_once, ex);
+  }
+  // A write runs as soon as its page shows, so settle the entry's first write
+  // and a watch now rather than in another fault.
+  const auto mapped = [&] {
+    if (is_write) {
+      MarkUserPieceChanged(window_offset);
+      TriggerUserWriteWatch(window_offset);
+    }
+    return true;
+  };
+  if (user_page_table_) {
+    if (MapUserPage(window_offset, false)) {
+      return mapped();
+    }
+    // With no entry or no table page, the guest can fill the entry in. Its
+    // handler runs guest code, so drop the lock around it.
+    // TODO(has207): this only drops one level of the recursive lock, so a
+    // thread that already held it runs the handler still holding it.
+    uint32_t unused_physical_address;
+    const UserPageState state =
+        TranslateUserPage(user_address, &unused_physical_address);
+    auto hook = user_fault_hook_.load(std::memory_order_relaxed);
+    if (hook && (state == UserPageState::kNoEntry ||
+                 state == UserPageState::kNoTable)) {
+      global_lock_locked_once.unlock();
+      const UserFaultResult taken = hook(user_address, is_write, ex);
+      global_lock_locked_once.lock();
+      if (taken == UserFaultResult::kDiverted) {
+        // The fault took the access over, so there is nothing to map now.
+        return true;
+      }
+      if (taken == UserFaultResult::kTaken &&
+          MapUserPage(window_offset, false)) {
+        // Under the global lock, so a plain counter is fine.
+        static uint32_t filled_count = 0;
+        if (xe::is_pow2(++filled_count)) {
+          XELOGI(
+              "The guest filled the page table entry for {:08X} it was "
+              "handed the fault for ({} pages so far)",
+              user_address & ~(kUserPageSize - 1), filled_count);
+        }
+        return mapped();
+      }
+    }
+  }
+  // Nothing the table can map so show the kernel address space there.
+  return MapUserPage(window_offset, true) && mapped();
 }
 
 bool Memory::AccessViolationCallbackThunk(
@@ -1209,12 +1231,8 @@ bool Memory::UserPageBlockIsContiguous(uint32_t page,
     const UserPageState state =
         TranslateUserPage(page + offset, &entry_address, &protection);
     if (state == UserPageState::kNoEntry || state == UserPageState::kNoTable) {
-      // A missing entry has to fault on its own, which takes 4 KB views.
-      // Without them one view still shows the entries that are there.
-      if (system_page_size_ == kUserSmallPageSize) {
-        return false;
-      }
-      continue;
+      // A missing entry has to fault on its own, which takes a split page.
+      return false;
     }
     if (state != UserPageState::kMapped ||
         entry_address != physical_address + offset) {
@@ -1344,6 +1362,15 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
     return false;
   }
   user_page_mapped_[index / 64] |= bit;
+  if (UserHostPagesCoarse()) {
+    const uint32_t first_file_page =
+        uint32_t((file_offset & ~uint64_t(system_allocation_granularity_ - 1)) /
+                 kUserSmallPageSize);
+    for (uint32_t i = 0; i < kUserSmallPagesPerView; ++i) {
+      user_piece_file_page_[first_piece + i] = first_file_page + i;
+    }
+    SetUserHostPagesView(first_piece, kUserSmallPagesPerView, true);
+  }
   std::fill_n(user_piece_access_.begin() + first_piece, kUserSmallPagesPerView,
               uint8_t(state == UserPageState::kMapped
                           ? UserEntryAccess(protection)
@@ -1365,17 +1392,13 @@ bool Memory::MapUserPage(uint32_t window_offset, bool allow_fallback) {
 }
 
 bool Memory::SplitUserPage(uint32_t index) {
-  // 4 KB views need 4 KB host pages.
-  if (system_page_size_ != kUserSmallPageSize) {
-    return false;
-  }
   if (!xe::memory::ReserveFileViewPages(
           user_virtual_membase() + size_t(index) * kUserPageSize,
           kUserPageSize)) {
     static bool reported = false;
     if (!reported) {
       reported = true;
-      XELOGE("Memory: unable to map a user mode page in 4 KB views");
+      XELOGE("Memory: unable to split a user mode page into 4 KB pieces");
     }
     return false;
   }
@@ -1385,7 +1408,7 @@ bool Memory::SplitUserPage(uint32_t index) {
   static uint32_t split_count = 0;
   if (xe::is_pow2(++split_count)) {
     XELOGI(
-        "Memory: user mode page {:08X} shows its entries in 4 KB views ({} "
+        "Memory: user mode page {:08X} shows its entries per 4 KB piece ({} "
         "pages so far)",
         index * kUserPageSize, split_count);
   }
@@ -1396,17 +1419,11 @@ bool Memory::SplitUserPage(uint32_t index) {
   return true;
 }
 
-bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
-  uint16_t& pieces = user_page_split_[piece / kUserSmallPagesPerView];
-  const auto bit =
-      static_cast<uint16_t>(1u << (piece % kUserSmallPagesPerView));
-  if (pieces & bit) {
-    return true;
-  }
+bool Memory::ResolveUserPiece(uint32_t piece, bool allow_fallback,
+                              uint64_t* out_file_offset, bool* out_from_entry,
+                              xe::memory::PageAccess* out_access) {
   const uint32_t window_offset = piece * kUserSmallPageSize;
   const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
-  // Read before translating and again after, as in MapUserPage.
-  const uint64_t table_key = UserPieceTableKey(piece);
   uint32_t physical_address;
   uint32_t protection = 0;
   const UserPageState state =
@@ -1419,8 +1436,6 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
             : 0x100000000ull + physical_address;
   }
   const bool from_entry = file_offset != UINT64_MAX;
-  const auto access = from_entry ? UserEntryAccess(protection)
-                                 : xe::memory::PageAccess::kReadWrite;
   if (!from_entry) {
     if (!allow_fallback) {
       return false;
@@ -1443,6 +1458,46 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
           "far)",
           user_address, unmapped_count);
     }
+  }
+  *out_file_offset = file_offset;
+  *out_from_entry = from_entry;
+  *out_access = from_entry ? UserEntryAccess(protection)
+                           : xe::memory::PageAccess::kReadWrite;
+  return true;
+}
+
+bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
+  uint16_t& pieces = user_page_split_[piece / kUserSmallPagesPerView];
+  const auto bit =
+      static_cast<uint16_t>(1u << (piece % kUserSmallPagesPerView));
+  if (pieces & bit) {
+    return true;
+  }
+  const uint32_t window_offset = piece * kUserSmallPageSize;
+  const uint32_t user_address = window_offset - UserWindowSkew(window_offset);
+  uint64_t file_offset;
+  bool from_entry;
+  xe::memory::PageAccess access;
+  // Read before translating and again after, as in MapUserPage.
+  const uint64_t table_key = UserPieceTableKey(piece);
+  if (!ResolveUserPiece(piece, allow_fallback, &file_offset, &from_entry,
+                        &access)) {
+    return false;
+  }
+  if (UserHostPagesCoarse()) {
+    // A host page shows its pieces once they all have entries that one view can
+    // show. Until then every access to it is emulated.
+    pieces |= bit;
+    user_piece_access_[piece] = uint8_t(access);
+    user_piece_file_page_[piece] = uint32_t(file_offset / kUserSmallPageSize);
+    TrackUserPieces(piece, 1, file_offset);
+    if (from_entry) {
+      TrackUserPieceChange(piece, user_address);
+    }
+    user_piece_table_key_[piece] =
+        UserPieceTableKey(piece) == table_key ? table_key : UINT64_MAX;
+    MapUserHostPage(piece & ~(UserPiecesPerHostPage() - 1));
+    return true;
   }
   auto view = reinterpret_cast<uint8_t*>(xe::memory::MapFileViewPages(
       mapping_, user_virtual_membase() + window_offset, kUserSmallPageSize,
@@ -1470,6 +1525,59 @@ bool Memory::MapUserPiece(uint32_t piece, bool allow_fallback) {
   return true;
 }
 
+void Memory::MapUserHostPage(uint32_t first_piece) {
+  const uint32_t piece_count = UserPiecesPerHostPage();
+  const uint32_t first_file_page = user_piece_file_page_[first_piece];
+  if (first_file_page == kUserNoPage ||
+      (uint64_t(first_file_page) * kUserSmallPageSize) %
+          system_allocation_granularity_) {
+    return;
+  }
+  for (uint32_t i = 1; i < piece_count; ++i) {
+    if (user_piece_file_page_[first_piece + i] != first_file_page + i) {
+      return;
+    }
+  }
+  const size_t host_page_size = size_t(piece_count) * kUserSmallPageSize;
+  auto view = reinterpret_cast<uint8_t*>(xe::memory::MapFileViewPages(
+      mapping_,
+      user_virtual_membase() + size_t(first_piece) * kUserSmallPageSize,
+      host_page_size, kUserViewMapAccess,
+      uint64_t(first_file_page) * kUserSmallPageSize));
+  if (!view || !xe::memory::AllocFixed(view, host_page_size,
+                                       xe::memory::AllocationType::kCommit,
+                                       xe::memory::PageAccess::kNoAccess)) {
+    static bool reported = false;
+    if (!reported) {
+      reported = true;
+      XELOGE(
+          "Memory: unable to show user mode window offset {:08X} in a view, so "
+          "its accesses stay emulated",
+          first_piece * kUserSmallPageSize);
+    }
+    if (view) {
+      xe::memory::ReleaseFileViewPages(mapping_, view, host_page_size);
+    }
+    return;
+  }
+  SetUserHostPagesView(first_piece, piece_count, true);
+  ProtectUserHostPages(first_piece, piece_count);
+}
+
+void Memory::SetUserHostPagesView(uint32_t first_piece, uint32_t count,
+                                  bool view) {
+  const uint32_t pieces_per_host_page = UserPiecesPerHostPage();
+  for (uint32_t host_page = first_piece / pieces_per_host_page;
+       host_page < (first_piece + count) / pieces_per_host_page; ++host_page) {
+    const uint64_t bit = uint64_t(1) << (host_page % 64);
+    if (view) {
+      user_host_page_view_[host_page / 64] |= bit;
+    } else {
+      user_host_page_view_[host_page / 64] &= ~bit;
+    }
+  }
+}
+
 void Memory::TrackUserPieces(uint32_t first_piece, uint32_t count,
                              uint64_t file_offset) {
   // Physical memory sits 4 GB into the mapping.
@@ -1489,10 +1597,6 @@ void Memory::TrackUserPieces(uint32_t first_piece, uint32_t count,
 }
 
 xe::memory::PageAccess Memory::UserEntryAccess(uint32_t protection) const {
-  // Protecting 4 KB needs 4 KB host pages.
-  if (system_page_size_ != kUserSmallPageSize) {
-    return xe::memory::PageAccess::kReadWrite;
-  }
   // With the user key PP 00 allows nothing, 01 and 11 reads, 10 both.
   switch (protection & kUserEntryProtection) {
     case 0:
@@ -1520,6 +1624,10 @@ xe::memory::PageAccess Memory::UserPieceAccess(uint32_t piece) const {
 }
 
 void Memory::ProtectUserPieces(uint32_t first_piece, uint32_t count) {
+  if (UserHostPagesCoarse()) {
+    ProtectUserHostPages(first_piece, count);
+    return;
+  }
   // Protect each run of pieces alike with one call.
   // TODO(has207): on Linux every protected run is a separate VMA, which can
   // approach vm.max_map_count when many views are mapped.
@@ -1537,13 +1645,148 @@ void Memory::ProtectUserPieces(uint32_t first_piece, uint32_t count) {
   }
 }
 
+void Memory::ProtectUserPiece(uint32_t piece) {
+  if (UserHostPagesCoarse()) {
+    ProtectUserHostPages(piece, 1);
+    return;
+  }
+  xe::memory::Protect(
+      user_virtual_membase() + size_t(piece) * kUserSmallPageSize,
+      kUserSmallPageSize, UserPieceAccess(piece), nullptr);
+}
+
+void Memory::ProtectUserHostPages(uint32_t first_piece, uint32_t count) {
+  const uint32_t pieces_per_host_page = UserPiecesPerHostPage();
+  const size_t host_page_size =
+      size_t(pieces_per_host_page) * kUserSmallPageSize;
+  uint8_t* user_membase = user_virtual_membase();
+  for (uint32_t host_page = first_piece / pieces_per_host_page;
+       host_page <= (first_piece + count - 1) / pieces_per_host_page;
+       ++host_page) {
+    if (!UserHostPageIsView(host_page * pieces_per_host_page)) {
+      continue;
+    }
+    // The strictest access of its pieces. An access another piece allows is
+    // emulated.
+    // TODO(has207): without LSE, LL/SC fails every time while another piece's
+    // entry or changed bit holds the host page read-only.
+    auto access = xe::memory::PageAccess::kReadWrite;
+    for (uint32_t i = 0; i < pieces_per_host_page; ++i) {
+      const auto piece_access =
+          UserPieceAccess(host_page * pieces_per_host_page + i);
+      if (piece_access == xe::memory::PageAccess::kNoAccess ||
+          (piece_access == xe::memory::PageAccess::kReadOnly &&
+           access == xe::memory::PageAccess::kReadWrite)) {
+        access = piece_access;
+      }
+    }
+    xe::memory::Protect(user_membase + host_page * host_page_size,
+                        host_page_size, access, nullptr);
+  }
+}
+
+uint8_t* Memory::TranslateEmulatedUserAccess(void* context, uint64_t address,
+                                             bool is_write, size_t* span,
+                                             bool* natively_readable) {
+  auto memory = static_cast<Memory*>(context);
+  const uint64_t window_offset =
+      address - reinterpret_cast<uint64_t>(memory->user_virtual_membase());
+  if (window_offset >= 0x100000000ull) {
+    return nullptr;
+  }
+  const uint32_t piece = uint32_t(window_offset / kUserSmallPageSize);
+  const uint32_t file_page = memory->user_piece_file_page_[piece];
+  if (file_page == kUserNoPage) {
+    return nullptr;
+  }
+  // A watch or a clear changed bit has to be settled by a fault of its own.
+  const auto access = memory->UserPieceAccess(piece);
+  if (access == xe::memory::PageAccess::kNoAccess ||
+      (is_write && access != xe::memory::PageAccess::kReadWrite)) {
+    return nullptr;
+  }
+  // A view is protected to the strictest access of its pieces.
+  *natively_readable = memory->UserHostPageIsView(piece);
+  const uint32_t first_piece = piece & ~(memory->UserPiecesPerHostPage() - 1);
+  for (uint32_t i = 0;
+       *natively_readable && i < memory->UserPiecesPerHostPage(); ++i) {
+    *natively_readable = memory->UserPieceAccess(first_piece + i) !=
+                         xe::memory::PageAccess::kNoAccess;
+  }
+  const uint32_t offset = uint32_t(window_offset % kUserSmallPageSize);
+  *span = kUserSmallPageSize - offset;
+  return memory->user_file_alias_ + uint64_t(file_page) * kUserSmallPageSize +
+         offset;
+}
+
+bool Memory::EmulateUserAccess(global_unique_lock_type& global_lock_locked_once,
+                               Exception* ex) {
+#if XE_ARCH_ARM64
+  uint64_t fault_address;
+  bool fault_is_write;
+  switch (EmulateArm64LoadStore(ex, &TranslateEmulatedUserAccess, this,
+                                &fault_address, &fault_is_write)) {
+    case Arm64EmulateResult::kDone: {
+      // Under the global lock, so a plain counter is fine.
+      static uint64_t emulated_count = 0;
+      if (xe::is_pow2(++emulated_count)) {
+        const uint32_t window_offset =
+            uint32_t(ex->fault_address() -
+                     reinterpret_cast<uint64_t>(user_virtual_membase()));
+        const uint32_t piece = window_offset / kUserSmallPageSize;
+        const uint32_t first_piece = piece & ~(UserPiecesPerHostPage() - 1);
+        const char* reason = "its pieces aren't contiguous";
+        if (UserHostPageIsView(piece)) {
+          reason = "another piece protects it";
+        } else {
+          for (uint32_t i = 0; i < UserPiecesPerHostPage(); ++i) {
+            if (user_piece_file_page_[first_piece + i] == kUserNoPage) {
+              reason = "a piece has no entry";
+              break;
+            }
+          }
+        }
+        XELOGI(
+            "Memory: emulated a user mode access at window offset {:08X} by "
+            "the instruction at {:X}, as {} ({} so far)",
+            window_offset, ex->pc() - 4, reason, emulated_count);
+      }
+      return true;
+    }
+    case Arm64EmulateResult::kFault: {
+      // Part of the access lands on another piece, which settles its own fault
+      // before the access runs again.
+      const uint64_t window_offset =
+          fault_address - reinterpret_cast<uint64_t>(user_virtual_membase());
+      if (window_offset >= 0x100000000ull) {
+        return false;
+      }
+      return UserAccessViolation(global_lock_locked_once,
+                                 uint32_t(window_offset), fault_is_write, ex);
+    }
+    case Arm64EmulateResult::kUnsupported:
+      break;
+  }
+  if (ex->pc() == ex->fault_address()) {
+    // The fetch of the instruction itself faulted, so it can't be read.
+    XELOGE("Memory: unable to emulate the user mode instruction fetch at {:X}",
+           ex->pc());
+  } else {
+    XELOGE(
+        "Memory: unable to emulate the user mode access by instruction {:08X} "
+        "at {:X}",
+        *reinterpret_cast<const uint32_t*>(ex->pc()), ex->pc());
+  }
+#endif  // XE_ARCH_ARM64
+  return false;
+}
+
 void Memory::WatchUserWrites(uint32_t physical_address, uint32_t length) {
-  if (!user_write_watches_ || !length || physical_address >= 0x20000000) {
+  if (!user_virtual_membase() || !length || physical_address >= 0x20000000) {
     return;
   }
   length = std::min(length, 0x20000000 - physical_address);
   auto global_lock = global_critical_region_.Acquire();
-  uint8_t* user_membase = user_virtual_membase();
   const uint32_t page_last =
       (physical_address + length - 1) / kUserSmallPageSize;
   for (uint32_t physical_page = physical_address / kUserSmallPageSize;
@@ -1554,10 +1797,8 @@ void Memory::WatchUserWrites(uint32_t physical_address, uint32_t length) {
       continue;
     }
     word |= bit;
-    ForEachUserPieceShowing(physical_page, [&](uint32_t piece) {
-      xe::memory::Protect(user_membase + size_t(piece) * kUserSmallPageSize,
-                          kUserSmallPageSize, UserPieceAccess(piece), nullptr);
-    });
+    ForEachUserPieceShowing(physical_page,
+                            [&](uint32_t piece) { ProtectUserPiece(piece); });
   }
 }
 
@@ -1573,11 +1814,8 @@ bool Memory::TriggerUserWriteWatch(uint32_t window_offset) {
     return false;
   }
   word &= ~bit;
-  uint8_t* user_membase = user_virtual_membase();
-  ForEachUserPieceShowing(physical_page, [&](uint32_t piece) {
-    xe::memory::Protect(user_membase + size_t(piece) * kUserSmallPageSize,
-                        kUserSmallPageSize, UserPieceAccess(piece), nullptr);
-  });
+  ForEachUserPieceShowing(physical_page,
+                          [&](uint32_t piece) { ProtectUserPiece(piece); });
   for (auto callback : physical_memory_invalidation_callbacks_) {
     callback->first(callback->second, physical_page * kUserSmallPageSize,
                     kUserSmallPageSize, true);
@@ -1603,12 +1841,6 @@ void Memory::TrackUserPieceChange(uint32_t piece, uint32_t user_address) {
           UserPageState::kMapped ||
       (protection & kUserEntryProtection) != 2 ||
       (protection & kUserEntryChanged)) {
-    return;
-  }
-  if (system_page_size_ != kUserSmallPageSize) {
-    // Without 4 KB protection the write can't be caught, so the entry counts
-    // as changed as soon as user mode can reach it.
-    SetUserEntryChanged(entry);
     return;
   }
   word |= bit;
@@ -1659,6 +1891,12 @@ bool Memory::MarkUserPieceChanged(uint32_t window_offset) {
     // The bit was set here, so a guest clearing it is seen as a change.
     user_piece_table_key_[other] |= kUserEntryChanged;
   }
+  if (UserHostPagesCoarse()) {
+    if (written) {
+      ProtectUserHostPages(first_piece, kUserSmallPagesPerView);
+    }
+    return true;
+  }
   // The pieces of a split page are separate views, and one protect can't span
   // two.
   const bool split =
@@ -1692,10 +1930,17 @@ void Memory::ReleaseUserPage(uint32_t index) {
     xe::memory::UnmapFileView(mapping_, view, kUserPageSize);
   }
   user_page_mapped_[index / 64] &= ~(uint64_t(1) << (index % 64));
+  if (UserHostPagesCoarse()) {
+    SetUserHostPagesView(index * kUserSmallPagesPerView, kUserSmallPagesPerView,
+                         false);
+  }
   for (uint32_t piece = index * kUserSmallPagesPerView;
        piece < (index + 1) * kUserSmallPagesPerView; ++piece) {
     user_piece_access_[piece] = uint8_t(xe::memory::PageAccess::kReadWrite);
     user_piece_unchanged_[piece / 64] &= ~(uint64_t(1) << (piece % 64));
+    if (UserHostPagesCoarse()) {
+      user_piece_file_page_[piece] = kUserNoPage;
+    }
     const uint32_t physical_page = user_piece_physical_[piece];
     if (physical_page == kUserNoPage) {
       continue;
@@ -1816,12 +2061,26 @@ bool Memory::EnableUserModeViews() {
   user_piece_unchanged_.assign(kUserPageCount * kUserSmallPagesPerView / 64, 0);
   user_block_pieces_.assign(kPhysicalSmallPageCount / kUserSmallPagesPerView,
                             {});
-  // Protecting 4 KB needs 4 KB host pages.
-  user_write_watches_ = system_page_size_ == kUserSmallPageSize;
   // Watches made before now aren't known per page. Every page starts watched
   // and its first write through user mode reports it once.
-  user_write_watched_.assign(kPhysicalSmallPageCount / 64,
-                             user_write_watches_ ? ~uint64_t(0) : 0);
+  user_write_watched_.assign(kPhysicalSmallPageCount / 64, ~uint64_t(0));
+  if (UserHostPagesCoarse()) {
+    // Host pages bigger than a piece emulate what one view can't show, through
+    // a view of the whole mapping.
+    user_piece_file_page_.assign(kUserPageCount * kUserSmallPagesPerView,
+                                 kUserNoPage);
+    user_host_page_view_.assign((0x100000000ull / system_page_size_ + 63) / 64,
+                                0);
+    if (!user_file_alias_) {
+      user_file_alias_ = reinterpret_cast<uint8_t*>(
+          xe::memory::MapFileView(mapping_, nullptr, kUserFileAliasSize,
+                                  xe::memory::PageAccess::kReadWrite, 0));
+      if (!user_file_alias_) {
+        XELOGE("Memory: unable to map the user mode emulation view");
+        return false;
+      }
+    }
+  }
   const uint64_t layout_end = reinterpret_cast<uint64_t>(physical_membase_) +
                               0x20000000ull + system_allocation_granularity_;
   // Low 32 bits clear like the kernel membase, which the JIT may rely on.
