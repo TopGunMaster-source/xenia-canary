@@ -265,15 +265,12 @@ inline void DivertToThunk(Exception* ex, void (*thunk)()) {
   ex->set_resume_pc(reinterpret_cast<uint64_t>(thunk));
 }
 
-#if XE_ARCH_AMD64 && !XE_PLATFORM_WIN32
-// Resumes the calling thread in |context|, which it must have faulted with,
-// and never returns. Clobbers the 8 bytes below the context's stack pointer,
-// which guest code keeps nothing in, and leaves the FP control register alone.
-// Restoring the stack pointer makes this unsafe to inline, so it stays a call
-// of its own. Release builds inline across objects.
+#if !XE_PLATFORM_WIN32
+// Resumes the calling thread in |context|, which it must have faulted with. x64
+// clobbers the 8 bytes below sp and keeps MXCSR, a64 restores FPCR and FPSR.
 [[noreturn]] XE_NOINLINE void ResumeHostContext(
     const HostThreadContext* context);
-#endif  // XE_ARCH_AMD64 && !XE_PLATFORM_WIN32
+#endif  // !XE_PLATFORM_WIN32
 
 class ExceptionHandler {
  public:
