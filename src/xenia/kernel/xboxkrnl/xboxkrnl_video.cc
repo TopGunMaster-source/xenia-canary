@@ -519,7 +519,8 @@ void VdSwap_entry(
   gpu_fetch.base_address = frontbuffer_physical_address >> 12;
   const uint32_t swap_index =
       g_vdswap_count.fetch_add(1, std::memory_order_relaxed);
-  if (kernel_memory()->code_alias_active() && swap_index < 3) {
+  if (kernel_memory()->code_alias_active() &&
+      (swap_index < 3 || (swap_index % 25 == 0 && swap_index <= 200))) {
     // XeFu's frames are written by the CPU: save what the front buffer holds
     // when it's handed over, and summarize it (#41).
     const uint32_t bytes =
@@ -547,16 +548,17 @@ void VdSwap_entry(
     }
   }
   if (cvars::xefu_invalidate_on_swap && kernel_memory()->code_alias_active()) {
-    // Physical 0x06000000-0x0EFFFFFF holds the emulated Xbox's memory (user
-    // segments B6000000-BEFFFFFF); 0xA0000000 is the physical heap's view.
+    // The emulated Xbox's 64 MB of RAM is physical 0x10000000-0x13FFFFFF
+    // (0xB0000000 in the physical heap's view). (An earlier version of this
+    // test used 0x06000000-0x0EFFFFFF, XeFu's own memory, by mistake.)
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true)) {
       XELOGI(
           "VdSwap: invalidating the GPU's copy of physical "
-          "06000000-0EFFFFFF on each swap (xefu_invalidate_on_swap)");
+          "10000000-13FFFFFF on each swap (xefu_invalidate_on_swap)");
     }
     kernel_memory()->TriggerPhysicalMemoryCallbacks(
-        xe::global_critical_region::AcquireDirect(), 0xA6000000u, 0x09000000u,
+        xe::global_critical_region::AcquireDirect(), 0xB0000000u, 0x04000000u,
         true, true, true);
   }
   g_vdswap_last_size.store((*width << 16) | (*height & 0xFFFF),
