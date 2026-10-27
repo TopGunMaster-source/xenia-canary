@@ -40,6 +40,10 @@ DEFINE_bool(disassemble_pm4, false,
             "Only does anything in debug builds, if set will disassemble and "
             "log all PM4 packets sent to the CP.",
             "Logging");
+DEFINE_uint32(log_pm4_packets, 0,
+              "Logs the first N command packets the GPU executes (header and "
+              "up to 16 data words, raw), in release builds too.",
+              "GPU");
 
 DEFINE_bool(
     log_ringbuffer_kickoff_initiator_bts, false,
@@ -126,6 +130,9 @@ DEFINE_bool(
 
 namespace xe {
 namespace gpu {
+
+// Packets logged so far (log_pm4_packets).
+std::atomic<uint32_t> g_pm4_packets_logged{0};
 
 // Ring buffer progress, for xefu's heartbeat (xboxkrnl_misc.cc).
 std::atomic<uint32_t> g_ring_wptr_writes{0};

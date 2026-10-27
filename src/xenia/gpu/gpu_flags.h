@@ -40,6 +40,7 @@ DECLARE_bool(occlusion_query_viz);
 DECLARE_int32(anisotropic_override);
 
 DECLARE_bool(disassemble_pm4);
+DECLARE_uint32(log_pm4_packets);
 
 DECLARE_bool(no_discard_stencil_in_transfer_pipelines);
 
