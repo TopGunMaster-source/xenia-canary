@@ -72,18 +72,6 @@ constexpr uint32_t kRecordParameterCount = 0x10;
 constexpr uint32_t kRecordInformation = 0x14;
 constexpr uint32_t kRecordSize = 0x1C;
 
-// POSIX runs the fault handler on the thread's signal stack, and running guest
-// code from it lets the next fault on that thread overwrite the suspended
-// signal frame, so a fault there diverts to a thunk on the fiber's own stack
-// and resumes the access through the host context it saved.
-// TODO(has207): a64 has no ResumeHostContext, so POSIX there can't resume the
-// access a fault interrupted.
-#if XE_PLATFORM_WIN32 || XE_ARCH_AMD64
-constexpr bool kDeliverUserFaults = true;
-#else
-constexpr bool kDeliverUserFaults = false;
-#endif  // XE_PLATFORM_WIN32 || XE_ARCH_AMD64
-
 constexpr uint32_t kReturnSentinel = 0xBCBCBCBC;
 // Keeps the handler clear of the frame that called KeEnterUserMode.
 constexpr uint64_t kHandlerStackGap = 0x100;
@@ -314,7 +302,6 @@ uint32_t UserModeCodeFault(PPCContext* context, uint32_t address) {
   return resume_address != address ? resume_address : 0;
 }
 
-#if XE_PLATFORM_WIN32 || XE_ARCH_AMD64
 // Runs the trap handler for a fault on the guest instruction at |address|.
 // Returns whether the interrupted access runs again, false if the fiber has to
 // restart at the address the handler left instead.
@@ -330,12 +317,10 @@ bool RunFaultHandler(PPCContext* context, XThread* thread, uint32_t address) {
   user_mode->restart_address = handler_returned ? resume_address : address;
   return false;
 }
-#endif  // XE_PLATFORM_WIN32 || XE_ARCH_AMD64
 
-#if !XE_PLATFORM_WIN32 && XE_ARCH_AMD64
-// A fault handed to the thunk below. The thunk copies it out before running
-// any guest code, so another fiber of the thread can use the slot while this
-// one is parked in a trap.
+#if !XE_PLATFORM_WIN32
+// Guest code can't run on the signal stack, where the next fault overwrites the
+// frame, so a fault diverts to the thunk below, which copies it out first.
 struct DivertedFault {
   HostThreadContext context;
   // The guest instruction the fault interrupted.
@@ -349,19 +334,23 @@ void UserModeFaultThunk() {
   XThread* thread = XThread::GetCurrentThread();
   const HostThreadContext context = diverted_fault.context;
   const uint32_t address = diverted_fault.address;
+#if XE_ARCH_AMD64
   // The signal return put back the MXCSR the fault ran with, which the context
   // doesn't carry and the handler's guest code changes.
   const uint32_t mxcsr = _mm_getcsr();
+#endif  // XE_ARCH_AMD64
   if (RunFaultHandler(thread->thread_state()->context(), thread, address)) {
     // The retry runs from the host registers, so changes the handler made to
     // the frame are lost.
     // TODO(has207): load the frame back into the host context instead.
+#if XE_ARCH_AMD64
     _mm_setcsr(mxcsr);
+#endif  // XE_ARCH_AMD64
     ResumeHostContext(&context);
   }
   RestartUserModeThunk();
 }
-#endif  // !XE_PLATFORM_WIN32 && XE_ARCH_AMD64
+#endif  // !XE_PLATFORM_WIN32
 
 // A user mode access with no page table entry, or one its entry's protection
 // forbids. The guest's handler can fix the entry and return, and the access
@@ -395,15 +384,12 @@ Memory::UserFaultResult UserModeFault(uint32_t fault_address, bool is_write,
   }
   DivertToThunk(ex, &RestartUserModeThunk);
   return Memory::UserFaultResult::kDiverted;
-#elif XE_ARCH_AMD64
+#else
   // The thunk gets the registers the access has to resume from.
   diverted_fault.context = *ex->thread_context();
   diverted_fault.address = address;
   DivertToThunk(ex, &UserModeFaultThunk);
   return Memory::UserFaultResult::kDiverted;
-#else
-  // kDeliverUserFaults keeps the hook off without a way to resume the access.
-  return Memory::UserFaultResult::kNotTaken;
 #endif  // XE_PLATFORM_WIN32
 }
 
@@ -471,15 +457,13 @@ dword_result_t KeCreateUserMode_entry(dword_t unknown, lpvoid_t descriptor,
   }
   context->processor->EnableDynamicCode();
   context->processor->set_syscall_hook(&UserModeSyscall);
-  if (kDeliverUserFaults) {
-    // The handler reads the registers of a fault from the context, which the
-    // JIT otherwise leaves stale mid-block.
-    // TODO(has207): this slows all user mode code down. Recovering the
-    // registers from the host context at the fault would avoid it.
-    context->processor->KeepDynamicCodeContextStores();
-    kernel_memory()->set_user_fault_hook(&UserModeFault);
-    context->processor->set_code_fault_hook(&UserModeCodeFault);
-  }
+  // The handler reads the registers of a fault from the context, which the JIT
+  // otherwise leaves stale mid-block.
+  // TODO(has207): this slows all user mode code down. Recovering the registers
+  // from the host context at the fault would avoid it.
+  context->processor->KeepDynamicCodeContextStores();
+  kernel_memory()->set_user_fault_hook(&UserModeFault);
+  context->processor->set_code_fault_hook(&UserModeCodeFault);
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT2(KeCreateUserMode, kThreading, kImplemented, kSketchy);
