@@ -40,6 +40,8 @@ class ByteStream;
 
 namespace gpu {
 
+extern std::atomic<uint32_t> g_pm4_packets_logged;
+
 enum class GPUSetting {
   ClearMemoryPageState,
   MemexportEnable,

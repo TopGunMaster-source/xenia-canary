@@ -57,6 +57,7 @@ uint32_t GetGuestVblankRateHz();
 DECLARE_int32(anisotropic_override);
 
 DECLARE_bool(disassemble_pm4);
+DECLARE_uint32(log_pm4_packets);
 
 DECLARE_bool(gpu_debug_markers);
 

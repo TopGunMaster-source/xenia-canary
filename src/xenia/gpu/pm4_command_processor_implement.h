@@ -340,6 +340,32 @@ void COMMAND_PROCESSOR::DisassembleCurrentPacket() XE_RESTRICT {
   logger.submit('d');
 }
 bool COMMAND_PROCESSOR::ExecutePacket() {
+  if (cvars::log_pm4_packets) {
+    uint32_t n = ::xe::gpu::g_pm4_packets_logged.fetch_add(1);
+    if (n < cvars::log_pm4_packets) {
+      const uint8_t* base = reader_.buffer();
+      const uint32_t size = uint32_t(reader_.capacity());
+      const uint32_t offset = uint32_t(reader_.read_offset());
+      auto word = [&](uint32_t i) {
+        return xe::load_and_swap<uint32_t>(base + (offset + i * 4) % size);
+      };
+      const uint32_t header = word(0);
+      uint32_t count = 0;
+      if ((header >> 30) == 0 || (header >> 30) == 3) {
+        count = ((header >> 16) & 0x3FFF) + 1;
+      } else if ((header >> 30) == 1) {
+        count = 2;
+      }
+      std::string text = fmt::format("PM4 {} hdr {:08X}", n, header);
+      for (uint32_t i = 1; i <= std::min<uint32_t>(count, 16); ++i) {
+        text += fmt::format(" {:08X}", word(i));
+      }
+      if (count > 16) {
+        text += fmt::format(" ... ({} words)", count);
+      }
+      XELOGI("{}", text);
+    }
+  }
 #if XE_ENABLE_PM4_DISASM == 1
   if (cvars::disassemble_pm4 && logging::ShouldLog(LogLevel::Debug)) {
     COMMAND_PROCESSOR::DisassembleCurrentPacket();
