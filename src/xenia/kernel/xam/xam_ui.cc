@@ -10,10 +10,18 @@
 #include "xenia/kernel/xam/xam_ui.h"
 
 #include <algorithm>
+#include <charconv>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <unordered_set>
+#include <vector>
 
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/png_utils.h"
+#include "xenia/base/string.h"
 #include "xenia/base/system.h"
+#include "xenia/base/utf8.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
@@ -22,6 +30,7 @@
 #include "xenia/kernel/xam/content_manager.h"
 #include "xenia/kernel/xam/xam_content_device.h"
 #include "xenia/kernel/xam/xam_private.h"
+#include "xenia/kernel/xmodule.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
@@ -1275,6 +1284,276 @@ dword_result_t XamShowNuiGuideUI_entry(unknown_t tracking_id, unknown_t unk2) {
   return X_ERROR_ACCESS_DENIED;
 }
 DECLARE_XAM_EXPORT1(XamShowNuiGuideUI, kNone, kStub);
+
+XLanguage xeGetLanguage(bool extended_languages_support);
+
+// Only XUI's string tables, which titles that don't link XUI can load through
+// xam.
+static std::mutex xui_lock;
+static bool xui_initialized = false;
+static std::unordered_set<uint32_t> xui_string_tables;
+
+dword_result_t XuiInit_entry(lpdword_t params) {
+  // The parameters start with their size.
+  if (params && *params > 0xC) {
+    return 0x8000FFFF;
+  }
+  std::lock_guard<std::mutex> lock(xui_lock);
+  if (xui_initialized) {
+    return 1;
+  }
+  xui_initialized = true;
+  return X_E_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XuiInit, kUI, kSketchy);
+
+dword_result_t XuiUninit_entry() {
+  std::lock_guard<std::mutex> lock(xui_lock);
+  xui_initialized = false;
+  return X_E_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XuiUninit, kUI, kSketchy);
+
+static std::optional<std::u16string> ReadXuiString(
+    std::span<const uint8_t> data, size_t* offset, size_t length) {
+  if (*offset + length * 2 > data.size()) {
+    return std::nullopt;
+  }
+  std::u16string string(length, u'\0');
+  for (size_t i = 0; i < length; ++i) {
+    string[i] =
+        char16_t(xe::load_and_swap<uint16_t>(data.data() + *offset + i * 2));
+  }
+  *offset += length * 2;
+  return string;
+}
+
+// A file in an XUIZ package, the archive XUI resources keep their files in.
+static std::optional<std::span<const uint8_t>> FindXuiPackageFile(
+    std::span<const uint8_t> package, const std::string_view name) {
+  constexpr uint32_t kXuiPackageMagic = 0x5855495A;  // XUIZ
+  if (package.size() < 0x16 ||
+      xe::load_and_swap<uint32_t>(package.data()) != kXuiPackageMagic) {
+    return std::nullopt;
+  }
+  const size_t data_start =
+      0x16 + size_t(xe::load_and_swap<uint32_t>(package.data() + 0x10));
+  const uint16_t file_count =
+      xe::load_and_swap<uint16_t>(package.data() + 0x14);
+  size_t offset = 0x16;
+  for (uint16_t i = 0; i < file_count; ++i) {
+    if (offset + 9 > package.size()) {
+      return std::nullopt;
+    }
+    const uint32_t size = xe::load_and_swap<uint32_t>(package.data() + offset);
+    const uint32_t file_offset =
+        xe::load_and_swap<uint32_t>(package.data() + offset + 4);
+    const size_t name_length = package[offset + 8];
+    offset += 9;
+    auto file_name = ReadXuiString(package, &offset, name_length);
+    if (!file_name) {
+      return std::nullopt;
+    }
+    if (xe::utf8::equal_case(xe::to_utf8(*file_name), name)) {
+      if (data_start + file_offset + size > package.size()) {
+        return std::nullopt;
+      }
+      return package.subspan(data_start + file_offset, size);
+    }
+  }
+  return std::nullopt;
+}
+
+// An XUIS string table, empty strings stand for missing ones. Version 1 is the
+// 2005 xam's and version 2 later ones', with the same entries.
+static std::optional<std::vector<std::u16string>> ParseXuiStringTable(
+    std::span<const uint8_t> data, uint8_t* out_flags) {
+  constexpr uint32_t kXuiStringTableMagic = 0x58554953;  // XUIS
+  if (data.size() < 0xC ||
+      xe::load_and_swap<uint32_t>(data.data()) != kXuiStringTableMagic ||
+      (data[4] != 1 && data[4] != 2)) {
+    return std::nullopt;
+  }
+  const uint8_t flags = data[5];
+  std::vector<std::u16string> strings(
+      xe::load_and_swap<uint16_t>(data.data() + 0xA));
+  size_t offset = 0xC;
+  auto read_string = [&]() -> std::optional<std::u16string> {
+    if (offset + 2 > data.size()) {
+      return std::nullopt;
+    }
+    const uint16_t length = xe::load_and_swap<uint16_t>(data.data() + offset);
+    offset += 2;
+    return ReadXuiString(data, &offset, length);
+  };
+  for (auto& string : strings) {
+    auto value = read_string();
+    if (!value) {
+      return std::nullopt;
+    }
+    string = std::move(*value);
+    // Indexed tables have nothing after the string, the others an id or a key.
+    if (flags & 2) {
+      continue;
+    }
+    if (flags & 1) {
+      offset += 4;
+    } else if (!read_string()) {
+      return std::nullopt;
+    }
+  }
+  if (offset > data.size()) {
+    return std::nullopt;
+  }
+  *out_flags = flags;
+  return strings;
+}
+
+dword_result_t XuiLoadStringTableFromFile_entry(lpu16string_t path,
+                                                lpdword_t table_ptr) {
+  if (!path || !table_ptr) {
+    return X_E_INVALIDARG;
+  }
+  // section://<module handle>,<section>#<file in its package>
+  const std::string url = xe::to_utf8(path.value());
+  constexpr std::string_view kSectionScheme = "section://";
+  if (!xe::utf8::starts_with_case(url, kSectionScheme)) {
+    XELOGW("XuiLoadStringTableFromFile: unsupported path {}", url);
+    return X_E_FAIL;
+  }
+  std::string_view location =
+      std::string_view(url).substr(kSectionScheme.size());
+  const size_t comma = location.find(',');
+  uint32_t hmodule = 0;
+  if (comma == std::string_view::npos ||
+      std::from_chars(location.data(), location.data() + comma, hmodule, 16)
+              .ptr != location.data() + comma ||
+      !hmodule) {
+    return X_E_FAIL;
+  }
+  location.remove_prefix(comma + 1);
+  const size_t hash = location.find('#');
+  const std::string section(location.substr(0, hash));
+  const std::string_view file_name = hash == std::string_view::npos
+                                         ? std::string_view()
+                                         : location.substr(hash + 1);
+
+  auto memory = kernel_state()->memory();
+  auto module = XModule::GetFromHModule(kernel_state(),
+                                        memory->TranslateVirtual(hmodule));
+  uint32_t section_data = 0;
+  uint32_t section_size = 0;
+  if (!module ||
+      XFAILED(module->GetSection(section, &section_data, &section_size))) {
+    return X_E_FAIL;
+  }
+  const std::span<const uint8_t> resource(
+      memory->TranslateVirtual<const uint8_t*>(section_data), section_size);
+
+  // XUI's locale follows the console language, a translation is in a folder
+  // named after it.
+  std::optional<std::span<const uint8_t>> localized;
+  std::optional<std::span<const uint8_t>> unlocalized = resource;
+  if (!file_name.empty()) {
+    const uint32_t locale_ptr =
+        kernel_state()->xam_state()->GetLanguageFallbackAddress(
+            static_cast<uint32_t>(xeGetLanguage(false)));
+    if (locale_ptr) {
+      const std::string locale = xe::to_utf8(xe::load_and_swap<std::u16string>(
+          memory->TranslateVirtual(locale_ptr)));
+      if (!locale.empty()) {
+        localized = FindXuiPackageFile(resource,
+                                       locale + "\\" + std::string(file_name));
+      }
+    }
+    unlocalized = FindXuiPackageFile(resource, file_name);
+  }
+  const auto& table_file = localized ? localized : unlocalized;
+  if (!table_file) {
+    return X_E_FAIL;
+  }
+
+  *table_ptr = 0;
+  uint8_t flags = 0;
+  auto strings = ParseXuiStringTable(*table_file, &flags);
+  if (!strings) {
+    return X_E_INVALIDARG;
+  }
+  // Strings a translation leaves empty come from the untranslated table.
+  if (localized && unlocalized && (flags & 2)) {
+    uint8_t unlocalized_flags = 0;
+    auto fallback = ParseXuiStringTable(*unlocalized, &unlocalized_flags);
+    if (fallback) {
+      for (size_t i = 0; i < std::min(strings->size(), fallback->size()); ++i) {
+        if ((*strings)[i].empty()) {
+          (*strings)[i] = (*fallback)[i];
+        }
+      }
+    }
+  }
+
+  // The string count, a pointer to each string or 0, then the strings.
+  uint32_t table_size = 4 + 4 * uint32_t(strings->size());
+  for (const auto& string : *strings) {
+    if (!string.empty()) {
+      table_size += uint32_t(string.size() + 1) * 2;
+    }
+  }
+  const uint32_t table = memory->SystemHeapAlloc(table_size);
+  if (!table) {
+    return X_E_FAIL;
+  }
+  auto table_data = memory->TranslateVirtual<uint8_t*>(table);
+  xe::store_and_swap<uint32_t>(table_data, uint32_t(strings->size()));
+  uint32_t string_address = table + 4 + 4 * uint32_t(strings->size());
+  for (size_t i = 0; i < strings->size(); ++i) {
+    const auto& string = (*strings)[i];
+    if (string.empty()) {
+      xe::store_and_swap<uint32_t>(table_data + 4 + i * 4, 0);
+      continue;
+    }
+    xe::store_and_swap<uint32_t>(table_data + 4 + i * 4, string_address);
+    auto chars = memory->TranslateVirtual<char16_t*>(string_address);
+    xe::copy_and_swap(chars, string.data(), string.size());
+    chars[string.size()] = u'\0';
+    string_address += uint32_t(string.size() + 1) * 2;
+  }
+  {
+    std::lock_guard<std::mutex> lock(xui_lock);
+    xui_string_tables.insert(table);
+  }
+  *table_ptr = table;
+  return X_E_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XuiLoadStringTableFromFile, kUI, kSketchy);
+
+pointer_result_t XuiLookupStringTableByIndex_entry(dword_t table,
+                                                   dword_t index) {
+  {
+    std::lock_guard<std::mutex> lock(xui_lock);
+    if (!xui_string_tables.contains(table)) {
+      return 0;
+    }
+  }
+  auto table_data = kernel_state()->memory()->TranslateVirtual<uint8_t*>(table);
+  if (index >= xe::load_and_swap<uint32_t>(table_data)) {
+    return 0;
+  }
+  return xe::load_and_swap<uint32_t>(table_data + 4 + index * 4);
+}
+DECLARE_XAM_EXPORT1(XuiLookupStringTableByIndex, kUI, kImplemented);
+
+dword_result_t XuiFreeStringTable_entry(dword_t table) {
+  {
+    std::lock_guard<std::mutex> lock(xui_lock);
+    if (!xui_string_tables.erase(table)) {
+      return X_E_INVALIDARG;
+    }
+  }
+  kernel_state()->memory()->SystemHeapFree(table);
+  return X_E_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XuiFreeStringTable, kUI, kImplemented);
 
 }  // namespace xam
 }  // namespace kernel
