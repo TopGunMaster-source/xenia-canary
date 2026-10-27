@@ -213,6 +213,14 @@ void MessageBoxDialog::OnDraw(ImGuiIO& io) {
     ImGui::OpenPopup(title_.c_str());
     has_opened_ = true;
   }
+
+  // Center every frame, a title can open one while the window is still being
+  // resized at launch.
+  ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30.0f, 0.0f),
+                           ImGuiCond_Always);
+
   if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
     // Handle keyboard escape or gamepad B/Back to cancel
@@ -223,7 +231,7 @@ void MessageBoxDialog::OnDraw(ImGuiIO& io) {
     }
 
     if (description_.size()) {
-      ImGui::Text("%s", description_.c_str());
+      ImGui::TextWrapped("%s", description_.c_str());
     }
 
     // Buttons - ImGui handles navigation, A button activates via ImGui
