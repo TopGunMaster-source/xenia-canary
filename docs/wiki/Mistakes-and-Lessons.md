@@ -108,6 +108,11 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Cost:** about 20 minutes of test runs, and a wrong conclusion on the wiki for a few hours.
 * **Rule:** before a test, check that it touches the thing it's meant to test, from the code that already knows (here, the RAM dump), not from a guess.
 
+### 22. Pushed a build that only compiled on Linux
+* **What:** the page table comparison build (`3e1ea2bf8`) named a variable `small`. Windows headers define `small` as a macro, so the Windows build (the only one the tests use) failed; `2b5027191` renamed it.
+* **Cost:** one CI round, about 30 minutes.
+* **Rule:** avoid names Windows headers define as macros (`small`, `near`, `far`, `min`, `max`, `interface`); when a build fails, read the compiler error before guessing.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
