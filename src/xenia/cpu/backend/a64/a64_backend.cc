@@ -1081,25 +1081,35 @@ static uint64_t ResolveLongjmp(ppc::PPCContext* guest_context,
   }
   const uint32_t live_frames =
       backend_context->current_stackpoint_depth - pending_pops;
-  for (auto* entry : processor->FindFunctionsWithAddress(target_address)) {
-    auto* afunc = static_cast<A64Function*>(entry);
+  const A64BackendStackpoint* stackpoints = backend_context->stackpoints;
+  const uint32_t stack_pointer = static_cast<uint32_t>(guest_context->r[1]);
+  const uint32_t sync_depth =
+      FindStackpointSyncDepth(stackpoints, live_frames, stack_pointer);
+  if (!sync_depth) {
+    return 0;
+  }
+  // The target's code only fits the frame of the function it was translated
+  // in. r1 alone can name the wrong frame: a callee entered at the stack
+  // pointer longjmp restores records the same r1 as its caller runs at, and
+  // XeFu's generated code keeps the x86 stack pointer in r1.
+  for (uint32_t i = sync_depth; i-- > 0;) {
+    // The frame longjmp returns to made a call, so it runs below the stack
+    // pointer it was entered with.
+    if (stackpoints[i].guest_stack_ <= stack_pointer) {
+      continue;
+    }
+    auto* function = LookupFrameFunction(backend, stackpoints, i, live_frames);
     // Landing on a function's first instruction would skip its prolog.
-    if (afunc->address() == target_address) {
+    if (!function || function->address() == target_address) {
       continue;
     }
-    const uintptr_t host_address =
-        afunc->MapGuestAddressToMachineCode(target_address);
-    if (!host_address) {
-      continue;
-    }
-    const uint32_t sync_depth =
-        FindStackpointSyncDepth(backend_context->stackpoints, live_frames,
-                                static_cast<uint32_t>(guest_context->r[1]));
-    if (sync_depth != 0) {
-      backend_context->pending_stackpoint_sync_depth = sync_depth;
+    // A function's range can hold unreachable instructions it has no code for.
+    if (const uintptr_t host_address =
+            function->MapGuestAddressToMachineCode(target_address)) {
+      // The stack synchronization helper at the target restores this frame.
+      backend_context->pending_stackpoint_sync_depth = i + 1;
       return host_address;
     }
-    break;
   }
   return 0;
 }
