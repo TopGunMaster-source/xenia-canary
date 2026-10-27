@@ -98,6 +98,11 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **What:** Edge's log was compared with ours to see which calls Edge makes, but Edge leaves frequent kernel calls (locks, waits, events) out of its log unless `log_high_frequency_kernel_calls` is on, which it wasn't. So "Edge's worker thread does nothing" and "Edge's display thread waits too" were read from lines that were never written.
 * **Rule:** before concluding from an absence in a log, check that the program logs that call at all with the settings used.
 
+### 20. Used a setting without checking it was compiled in
+* **What:** both forks were set to `disassemble_pm4 = true` to log GPU packets, and both test runs were made, but that logger is compiled only into debug builds (`#if !defined(NDEBUG)`); the release builds being tested logged nothing.
+* **Cost:** one pair of test runs.
+* **Rule:** before relying on a setting, check that the code behind it is in the build being run.
+
 ## Patterns behind them
 
 1. Not questioning the setup once it worked well enough.
