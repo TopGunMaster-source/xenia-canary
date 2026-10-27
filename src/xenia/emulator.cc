@@ -874,9 +874,13 @@ bool Emulator::KeepsXboxGame(const std::filesystem::path& path) const {
 }
 
 // Whether an executable is xbox.xex, which picks the XeFu build for a game.
-// The builds share its title ID but not its original PE name.
+// The builds share its title ID but not its bounding path, and older xbox.xex
+// releases have no original PE name.
 static bool IsXeFuDispatcher(const std::optional<vfs::XexMetadata>& xex) {
-  return xex && xe::utf8::equal_case(xex->module_name, "xboxc.exe");
+  return xex &&
+         xe::utf8::equal_case(
+             xex->bounding_path,
+             "\\Device\\Harddisk0\\SystemPartition\\Compatibility\\xbox.xex");
 }
 
 X_STATUS Emulator::LaunchXboxOriginal(const std::filesystem::path& path,
