@@ -657,8 +657,8 @@ static void CompareAliasWithXboxPageTables() {
     }
     uint32_t page = va >> kUserPageShift;
     if (page < g_alias_has_small.size() && g_alias_has_small[page]) {
-      uint32_t small = g_alias_small[(page << 4) | ((va >> 12) & 15)];
-      return small ? (small & ~3u) + (va & 0xFFFu) : 0;
+      uint32_t small_entry = g_alias_small[(page << 4) | ((va >> 12) & 15)];
+      return small_entry ? (small_entry & ~3u) + (va & 0xFFFu) : 0;
     }
     if (page < g_alias_pages.size() && g_alias_pages[page]) {
       return (g_alias_pages[page] & ~3u) + (va & 0xFFFFu);
