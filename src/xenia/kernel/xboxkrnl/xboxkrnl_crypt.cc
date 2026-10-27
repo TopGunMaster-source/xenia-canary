@@ -126,6 +126,11 @@ static_assert_size(XECRYPT_AES_STATE, 0x160);
 static constexpr uint8_t key14[] = {'0', '1', '2', '3', '4', '5',
                                     '6', '7', '8', '9', '1', '0'};  // string
 
+// Motherboard serial number key; xefu builds the original Xbox's hard drive
+// key from it. (From Xenia Edge 0427aa7649 by Herman S.)
+static constexpr uint8_t key15[] = {'0', '1', '2', '3', '4', '5',
+                                    '6', '7', '8', '9', '1', '0'};  // string
+
 // Retail key 0x19
 static constexpr uint8_t key19[] = {0xE1, 0xBC, 0x15, 0x9C, 0x73, 0xB1,
                                     0xEA, 0xE9, 0xAB, 0x31, 0x70, 0xF3,
@@ -168,6 +173,7 @@ static constexpr uint8_t key39[] = {                 // pirs_retail_public
 
 const static std::map<uint16_t, std::span<const uint8_t>> key_vault = {
     {0x14, key14},
+    {0x15, key15},
     {0x19, key19},
     {0x39, key39},
 };
@@ -1043,7 +1049,13 @@ dword_result_t XeKeysGetKey_entry(word_t key, lpvoid_t key_buffer,
                                   lpdword_t key_length) {
   if (key_vault.contains(key)) {
     std::span<const uint8_t> key_needed = key_vault.at(key);
-    std::memcpy(key_buffer, key_needed.data(), *key_length);
+    // The hypervisor returns a fixed size key only into a buffer of its size,
+    // and writes that size back (Xenia Edge 0427aa7649).
+    if (*key_length != key_needed.size()) {
+      return 0xC8000004;
+    }
+    std::memcpy(key_buffer, key_needed.data(), key_needed.size());
+    *key_length = static_cast<uint32_t>(key_needed.size());
   } else {
     XELOGW("Key 0x{:04X} not implemented", static_cast<uint16_t>(key));
   }
