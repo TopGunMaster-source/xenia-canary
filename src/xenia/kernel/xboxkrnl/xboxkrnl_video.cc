@@ -11,6 +11,7 @@
 
 #include <atomic>
 
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
@@ -516,7 +517,35 @@ void VdSwap_entry(
     return;
   }
   gpu_fetch.base_address = frontbuffer_physical_address >> 12;
-  g_vdswap_count.fetch_add(1, std::memory_order_relaxed);
+  const uint32_t swap_index =
+      g_vdswap_count.fetch_add(1, std::memory_order_relaxed);
+  if (kernel_memory()->code_alias_active() && swap_index < 3) {
+    // XeFu's frames are written by the CPU: save what the front buffer holds
+    // when it's handed over, and summarize it (#41).
+    const uint32_t bytes =
+        (1 + gpu_fetch.size_2d.width) * (1 + gpu_fetch.size_2d.height) * 4;
+    auto data = kernel_memory()->TranslatePhysical<const uint8_t*>(
+        frontbuffer_physical_address);
+    uint32_t nonzero = 0;
+    for (uint32_t i = 0; i < bytes; i += 4) {
+      nonzero += xe::load<uint32_t>(data + i) != 0;
+    }
+    XELOGI(
+        "VdSwap {}: front buffer at physical {:08X}, {} bytes, {} non-zero "
+        "pixels, first words {:08X} {:08X} {:08X} {:08X}, middle {:08X}",
+        swap_index, frontbuffer_physical_address, bytes, nonzero,
+        xe::load_and_swap<uint32_t>(data),
+        xe::load_and_swap<uint32_t>(data + 4),
+        xe::load_and_swap<uint32_t>(data + 8),
+        xe::load_and_swap<uint32_t>(data + 12),
+        xe::load_and_swap<uint32_t>(data + (bytes / 2 & ~3u)));
+    auto path = kernel_state()->emulator()->storage_root() /
+                fmt::format("xefu_frontbuffer_{}.bin", swap_index);
+    if (FILE* file = xe::filesystem::OpenFile(path, "wb")) {
+      fwrite(data, 1, bytes, file);
+      fclose(file);
+    }
+  }
   if (cvars::xefu_invalidate_on_swap && kernel_memory()->code_alias_active()) {
     // Physical 0x06000000-0x0EFFFFFF holds the emulated Xbox's memory (user
     // segments B6000000-BEFFFFFF); 0xA0000000 is the physical heap's view.
