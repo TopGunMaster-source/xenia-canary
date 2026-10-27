@@ -11,7 +11,7 @@ Milestones in order. The numbers in brackets refer to [[Issues and Fixes]].
 | 5 | The Xbox kernel asks for `\Device\CdRom0\default.xbe` and XeFu opens it | ✅ [19, 20] |
 | 6 | The XBE header reaches the Xbox's memory | ✅ [21] |
 | 7 | The XBE's RSA signature verifies | ✅ [22] |
-| 8 | The media check passes | ✅ [23] |
+| 8 | The disc authentication check passes | ✅ [23] |
 | 9 | Sections load: `.text`, `XMV`, `DSOUND`, `WMADEC` verified | ✅ [24, 25] |
 | 10 | Section `XONLINE` verified | ✅ [26] |
 | 10b | Section `XNET` and all remaining sections verified | ✅ [31] |

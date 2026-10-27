@@ -19,7 +19,7 @@ An import Xenia doesn't define returns whatever happened to be in `r3`, usually 
 * `XamExecuteChallenge`, `NetDll_Xnp*`: Xbox Live and system-link networking. Only needed for online/LAN play.
 
 ## Stubs worth watching
-Stubs return a fixed answer. The ones XeFu depends on most: `KeSweepIcacheRange` (now drops stale translations, #9), `NtDeviceIoControlFile` (DVD queries; #23 added the media check), `NtFlushBuffersFile`, `IoDismountVolume*`, the `Vd*` video functions (graphics start-up: the next big area), `XAudio*Voice*` (audio), `XamInputGetCapabilities` (controllers).
+Stubs return a fixed answer. The ones XeFu depends on most: `KeSweepIcacheRange` (now drops stale translations, #9), `NtDeviceIoControlFile` (DVD queries; #23 added the disc authentication check), `NtFlushBuffersFile`, `IoDismountVolume*`, the `Vd*` video functions (graphics start-up: the next big area), `XAudio*Voice*` (audio), `XamInputGetCapabilities` (controllers).
 
 ## XeFu's own checks
 XeFu calls its C runtime `abort()` (`820C75E0`) from about 30 places and `KeBugCheck`/`KeBugCheckEx` from 8. When one fires, Xenia now logs the guest call chain (`6f56aab`), which names the check.

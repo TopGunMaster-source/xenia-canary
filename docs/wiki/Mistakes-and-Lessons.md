@@ -23,7 +23,7 @@ Mistakes made while working on this project (most by Claude, the AI assistant do
 * **Rule:** copy a real configuration whole, then remove things on purpose, never the other way round.
 
 ### 4. Helped post a wrong claim publicly
-* **What:** the reply drafted for Xenia Edge's issue #319 said Burnout 3 fails in Edge and gets further in our fork, from a test on the wrong XeFu build and without detailed logs. A later side-by-side test with `xefu6` and detailed logs showed the Edge failure was real for our files, caused by an unanswered media check, not by the build; but that wasn't known when it was posted.
+* **What:** the reply drafted for Xenia Edge's issue #319 said Burnout 3 fails in Edge and gets further in our fork, from a test on the wrong XeFu build and without detailed logs. A later side-by-side test with `xefu6` and detailed logs showed the Edge failure was real for our files, caused by an unanswered disc authentication check, not by the build; but that wasn't known when it was posted.
 * **Cost:** a follow-up was needed to explain what was actually happening.
 * **Why:** a surprising result ("we're ahead") was treated as a win, not as something to explain, and it went public unchecked.
 * **Rule:** anything posted in the owner's name is checked against its evidence first, and surprising results are investigated before they're claimed.
