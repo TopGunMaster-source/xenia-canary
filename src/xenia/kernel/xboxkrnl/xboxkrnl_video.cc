@@ -18,6 +18,8 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_rtl.h"
 #include "xenia/xbox.h"
 
+#include <chrono>
+
 DEFINE_int32(
     video_standard, 1,
     "Enables switching between different video signals.\n   1=NTSC\n   "
@@ -26,6 +28,12 @@ DEFINE_int32(
 
 // Defined in gpu_flags.cc
 DECLARE_bool(use_50Hz_mode);
+DEFINE_bool(log_swap_rate, true,
+            "Logs once a second how many frames the guest presented (VdSwap), "
+            "how many of them showed a new front buffer, and the longest gap "
+            "between two presents.",
+            "Video");
+
 DEFINE_bool(interlaced, false, "Toggles interlaced mode.", "Video");
 
 // TODO: This is stored in XConfig somewhere, probably in video flags.
@@ -478,6 +486,43 @@ void VdSwap_entry(
     return;
   }
   gpu_fetch.base_address = frontbuffer_physical_address >> 12;
+  if (cvars::log_swap_rate) {
+    // Swap rate meter. VdSwap is called from one guest thread at a time.
+    using meter_clock = std::chrono::steady_clock;
+    static meter_clock::time_point window_start = meter_clock::now();
+    static meter_clock::time_point last_swap = window_start;
+    static uint32_t swaps = 0, new_buffers = 0, last_buffer = 0, seconds = 0;
+    static int64_t longest_gap_us = 0;
+    const meter_clock::time_point now = meter_clock::now();
+    const int64_t gap_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(now - last_swap)
+            .count();
+    if (gap_us > longest_gap_us) {
+      longest_gap_us = gap_us;
+    }
+    last_swap = now;
+    ++swaps;
+    if (frontbuffer_physical_address != last_buffer) {
+      ++new_buffers;
+      last_buffer = frontbuffer_physical_address;
+    }
+    const int64_t window_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(now -
+                                                              window_start)
+            .count();
+    if (window_us >= 1000000) {
+      ++seconds;
+      XELOGI(
+          "Swap rate: second {}: {:.1f} presents/s, {:.1f} new front "
+          "buffers/s, longest gap {:.1f} ms",
+          seconds, swaps * 1e6 / window_us, new_buffers * 1e6 / window_us,
+          longest_gap_us / 1000.0);
+      window_start = now;
+      swaps = 0;
+      new_buffers = 0;
+      longest_gap_us = 0;
+    }
+  }
   XE_MAYBE_UNUSED
   auto texture_format = gpu::xenos::TextureFormat(texture_format_ptr.value());
   auto color_space = *color_space_ptr;
