@@ -1,5 +1,7 @@
 # Progress
 
+**Status (October 28, 2026): paused.** [[Xenia Edge]]'s latest build runs Burnout 3 properly with these game files, so that's the way to play it for now. This fork still shows a black screen once the game starts drawing ([[Issues and Fixes]] #41). The last diagnostic build (`2b5027191`, which compares our memory mapping with the Xbox's page tables) is installed but hasn't been run yet.
+
 Milestones in order. The numbers in brackets refer to [[Issues and Fixes]].
 
 | # | Milestone | Status |
