@@ -67,3 +67,7 @@ Test build `edge-mediacheck@05c1080b8`: Edge `3558152` plus one change, answerin
 Edge's author explained on issue #319 that most people run patched XeFu builds, in which the disc authentication check, the region check, the XBE header signature and the section digests are skipped. Our files are Microsoft's stock builds, which run all four; that's why exact RSA, SHA-1 and RC4 mattered here (#14, #22). Edge has since added support for unpatched builds (`47d65f5939` disc authentication, `7180422251` the stock `xbox.xex`, `0427aa7649` key `0x15`) and reports Burnout 3 at 60 fps with memexport disabled (not tested here).
 
 Ported from that set: key `0x15` and `XeKeysGetKey`'s length handling (`0427aa7649`) as `f994494777`. XeFu builds the original Xbox's hard drive key from key `0x15`; Xenia reported it read without writing it (`Key 0x0015 not implemented` in our logs).
+
+## Latest Edge on the same files (October 28, 2026)
+
+Edge `059cc5a5e` (build tag checked in the log), same game files and `xefu_launcher = xefu6.xex`, with `memexport_enable = false` as Edge's author recommends and `log_level = 2`. Result: the game runs a lot better than with `3558152`; the slow motion is gone. The frame rate hasn't been measured yet. Edge's log counts about 247,600 frames for the run, but it has no timestamps, so that count doesn't give a rate.
